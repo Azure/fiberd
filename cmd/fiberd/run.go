@@ -2,10 +2,10 @@ package main
 
 // fiberd run tries a template on this machine with one command.
 //
-//	fiberd run examples/hello/hello.py
-//	fiberd run -n 50 -time examples/hello/hello.py
-//	fiberd run -park examples/hello/counter.py
-//	fiberd run -n 3 -max 2 examples/hello/hello.py
+//	fiberd run examples/fiberd-cli/hello.py
+//	fiberd run -n 50 -time examples/fiberd-cli/hello.py
+//	fiberd run -park examples/fiberd-cli/counter.py
+//	fiberd run -n 3 -max 2 examples/fiberd-cli/hello.py
 //	fiberd run -payload world -- bin/mytemplate --flag
 //
 // It starts fiberd inside this process on the proc backend, admits one
@@ -143,7 +143,7 @@ func runTemplate(ctx context.Context, args []string, stdout, stderr io.Writer) e
 // the command on spaces, so no argument may hold one.
 func templateCommand(args []string, pythonPath string) ([]string, error) {
 	if len(args) == 0 {
-		return nil, errors.New("fiberd run: name the template, such as examples/hello/hello.py")
+		return nil, errors.New("fiberd run: name the template, such as examples/fiberd-cli/hello.py")
 	}
 	for _, a := range args {
 		if a == "" || strings.ContainsAny(a, " \t\n") {
