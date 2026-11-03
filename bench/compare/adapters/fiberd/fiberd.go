@@ -43,8 +43,7 @@ type Options struct {
 	IssuerKey, IssuerURL string
 	// NodeID is the grant's audience, the home's node id.
 	NodeID string
-	// TemplateDigest selects the home's -template mapping. Empty means
-	// DefaultTemplateDigest.
+	// TemplateDigest selects the home's -template mapping.
 	TemplateDigest string
 	// Tenant is what the grant's named sessions are filed under. Default
 	// "compare".
@@ -115,11 +114,6 @@ func New(ctx context.Context, o Options) (*Adapter, error) {
 	return a, nil
 }
 
-// DefaultTemplateDigest is the grant's template digest when
-// Options.TemplateDigest is empty. An issuer mints only a full sha256
-// digest, and a home serves this one from its "default" -template entry.
-const DefaultTemplateDigest = "sha256:1241626eb8ca542931d74f9ac0f6b294e791ff041ab106789b514331e74c9830"
-
 // Grant is the grant the adapter presents.
 func (a *Adapter) Grant() (core.Grant, error) {
 	iso, err := core.ParseIsolation(a.o.Isolation)
@@ -128,7 +122,7 @@ func (a *Adapter) Grant() (core.Grant, error) {
 	}
 	digest := a.o.TemplateDigest
 	if digest == "" {
-		digest = DefaultTemplateDigest
+		digest = "sha256:compare"
 	}
 	tenant := a.o.Tenant
 	if tenant == "" {

@@ -116,10 +116,9 @@ func (d Driver) wBudget() uint64 {
 	return 1 << 20
 }
 
-// defaultTemplate is the digest minted grants carry when the driver names
-// none. An issuer mints only a full sha256 digest, and a home serves this
-// one from its "default" -template entry.
-const defaultTemplate = "sha256:7693628103f401d6b976f77ead49b519e55995a501dd394606d085575ec14ac2"
+// defaultTemplate is the template key minted grants carry when the driver
+// names none. A home serves it from its "default" -template entry.
+const defaultTemplate = "sha256:conform"
 
 // Run executes the seven cases as subtests.
 func Run(t *testing.T, d Driver) {
