@@ -97,9 +97,9 @@ start_issuer
 for rt in "$@"; do
   case "$rt" in
     proc)
-      start_home proc -template "default=$PWD/bin/counter --heap-mb 32" -template "sha256:line=$PWD/bin/counter --heap-mb 32 --framing line"
+      start_home proc -template "default=$PWD/bin/counter --heap-mb 32" -template "sha256:38a9c1e721584da284b90ceea4ed7eb8db15ac4ea86c2c75ec925d5f8799fcf0=$PWD/bin/counter --heap-mb 32 --framing line"
       measure fiberd-proc shared-kernel proc
-      measure fiberd-proc-line shared-kernel proc -template sha256:line -framing line
+      measure fiberd-proc-line shared-kernel proc -template sha256:38a9c1e721584da284b90ceea4ed7eb8db15ac4ea86c2c75ec925d5f8799fcf0 -framing line
       stop_home ;;
     runc)
       rootfs

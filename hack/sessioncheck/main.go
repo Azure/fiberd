@@ -71,8 +71,8 @@ func run(o opts) error {
 		return fmt.Errorf("-isolation: %w", err)
 	}
 	g := core.Grant{
-		UID: fmt.Sprintf("check-%d", time.Now().Unix()), Audience: o.nodeID, TemplateDigest: "sha256:check", Tenant: o.tenant,
-		FiberMax: 2, WBudgetBytes: 32 << 20, LeaseExpiry: time.Now().Add(time.Hour),
+		UID: fmt.Sprintf("check-%d", time.Now().Unix()), Audience: o.nodeID, TemplateDigest: "sha256:20f65c28671b40937c5bf23acc7c6f37e5a5ec0622e347b57685725df5ba9e50", Tenant: o.tenant,
+		FiberMax: 2, WBudgetBytes: 32 << 20, LeaseExpiry: time.Now().Add(time.Hour).Truncate(time.Second),
 		Policy: core.Policy{Isolation: iso},
 	}
 	tok, err := (&grant.Issuer{Key: key, URL: o.issuerURL}).Mint(g)

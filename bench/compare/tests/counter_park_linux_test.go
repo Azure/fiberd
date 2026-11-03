@@ -119,6 +119,14 @@ func waitFor(t *testing.T, ok func() bool) {
 	t.Fatal("did not come up")
 }
 
+// The counter's template digests. An issuer mints only a full sha256
+// digest. The home serves httpTemplate from its "default" entry and
+// lineTemplate from its own.
+const (
+	httpTemplate = "sha256:e0603c499aae47eb89343ad0ef3178e044c62e70ae2309b35591d1d49a3211ec"
+	lineTemplate = "sha256:38a9c1e721584da284b90ceea4ed7eb8db15ac4ea86c2c75ec925d5f8799fcf0"
+)
+
 // TestCounterParkResume parks a proc fiber of the counter and resumes
 // it, under both framings, the way the resume rows of bench-compare do.
 // Parks are cooperative, so the counter must answer SIGUSR1 with
@@ -164,7 +172,7 @@ func TestCounterParkResume(t *testing.T) {
 	background(t, filepath.Join(state, "fiberd.log"), filepath.Join(bin, "fiberd"),
 		"-state", state, "-node-id", node, "-verifier", "jwks", "-issuer", issuerURL, "-insecure-plaintext",
 		"-listen", homeAddr, "-runtime", "proc", "-cgroup-root", cgroot,
-		"-template", "default="+counter+" --heap-mb 8", "-template", "sha256:line="+counter+" --heap-mb 8 --framing line")
+		"-template", "default="+counter+" --heap-mb 8", "-template", lineTemplate+"="+counter+" --heap-mb 8 --framing line")
 	waitFor(t, func() bool { _, err := os.Stat(filepath.Join(state, "private", "admin.sock")); return err == nil })
 
 	cases := []struct {
@@ -173,9 +181,9 @@ func TestCounterParkResume(t *testing.T) {
 		framing  compare.Framing
 		incr     int // increments after the first, before the park
 	}{
-		{name: "HTTP, parked after the first increment", template: "sha256:http", framing: compare.HTTP},
-		{name: "HTTP, parked after four increments", template: "sha256:http", framing: compare.HTTP, incr: 3},
-		{name: "line protocol, parked after four increments", template: "sha256:line", framing: compare.Line, incr: 3},
+		{name: "HTTP, parked after the first increment", template: httpTemplate, framing: compare.HTTP},
+		{name: "HTTP, parked after four increments", template: httpTemplate, framing: compare.HTTP, incr: 3},
+		{name: "line protocol, parked after four increments", template: lineTemplate, framing: compare.Line, incr: 3},
 	}
 	for i, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

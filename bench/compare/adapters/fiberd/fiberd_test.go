@@ -234,7 +234,7 @@ func TestGrant(t *testing.T) {
 			if err != nil {
 				return
 			}
-			if g.Policy.Isolation.String() != tc.wantIso || g.Audience != "n" || g.TemplateDigest != "sha256:compare" || g.WBudgetBytes != tc.opt.WBudget || g.FiberWarm != tc.opt.FiberWarm {
+			if g.Policy.Isolation.String() != tc.wantIso || g.Audience != "n" || g.TemplateDigest != DefaultTemplateDigest || g.WBudgetBytes != tc.opt.WBudget || g.FiberWarm != tc.opt.FiberWarm {
 				t.Errorf("grant %+v", g)
 			}
 		})

@@ -88,7 +88,7 @@ func main() {
 	fs.StringVar(&o.issuerKey, "issuer-key", "", "fiberd: private JWK to mint the grant with")
 	fs.StringVar(&o.issuerURL, "issuer", "", "fiberd: issuer URL the home verifies against")
 	fs.StringVar(&o.nodeID, "node-id", "", "fiberd: the home's node id (grant audience)")
-	fs.StringVar(&o.digest, "template", "sha256:compare", "fiberd: template digest")
+	fs.StringVar(&o.digest, "template", fiberd.DefaultTemplateDigest, "fiberd: template digest")
 	fs.StringVar(&o.isolation, "isolation", "TRUSTED", "fiberd: TRUSTED or UNTRUSTED")
 	fs.Uint64Var(&o.wBudget, "w-budget", 64<<20, "fiberd: per-fiber working set ceiling in bytes")
 	fs.IntVar(&o.fiberMax, "fiber-max", 0, "fiberd: fibers.max (0 = unlimited)")
