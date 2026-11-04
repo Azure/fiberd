@@ -133,6 +133,14 @@ fn parse_args() -> Result<Args> {
             // The template command's first word names the guest for
             // fiberd's benefit; anything else is unknown.
             "guest" => {}
+            // A template artifact carrying a guest snapshot is restored by a
+            // helper for that guest. This one runs its own guest only, and
+            // says so rather than warm the wrong one.
+            "--template-dir" => {
+                return Err(anyhow!(
+                    "--template-dir: this helper restores its own guest only, not a template's snapshot; use a helper for that guest"
+                ));
+            }
             other => return Err(anyhow!("unknown argument {other}")),
         }
     }

@@ -19,6 +19,11 @@
 // guest reaches it only through the helper, which puts the fiber's fence
 // in each request, so the helper's cgroup speaks for every fiber and the
 // host sends the engine RELAY for it (RelaysEngine).
+//
+// A template artifact may carry the guest's snapshot as its images
+// (artifact.ImagesFormatHyperlight). The host opens a read-only copy of it
+// for each warm (SnapshotRestorer), and the helper restores the warm
+// instance from it, given as --template-dir.
 package hyperlight
 
 import (
@@ -236,6 +241,17 @@ func (b *Backend) Tier() core.Tier { return b.tier }
 // hypervisor.
 func (b *Backend) IsolatesTenants() bool { return true }
 
+// ImagesFormat implements backend.SnapshotRestorer: the helper restores a
+// Hyperlight snapshot a template artifact carries (--template-dir), once
+// it is usable. An unusable helper restores none, so the host refuses
+// such a template rather than open its snapshot for nothing.
+func (b *Backend) ImagesFormat() string {
+	if b.tier < core.TierSnapshot {
+		return ""
+	}
+	return artifact.ImagesFormatHyperlight
+}
+
 // RelaysEngine is true because a fiber has no process of its own. Its
 // engine requests come from the helper, in the warm instance's cgroup,
 // with the fiber's fence put in by the helper, never by the guest.
@@ -288,6 +304,23 @@ func (b *Backend) Warm(ctx context.Context, sp backend.WarmSpec) (backend.Warm, 
 	if b.tier < core.TierSnapshot {
 		return backend.Warm{}, errors.New("hyperlight: helper or guest unavailable")
 	}
+	// A registry template is warmed from its snapshot or not at all: the
+	// helper never runs a template's executable, so one without a snapshot
+	// would have the helper warm its own guest under the template's
+	// digest, and parity would pass.
+	if sp.Template.Dir != "" && sp.Template.SnapshotDir == "" {
+		return backend.Warm{}, fmt.Errorf("hyperlight: template %s comes from a registry without a Hyperlight snapshot, and the helper would warm its own guest in its place", sp.Template.Digest)
+	}
+	// A registry template's arguments come from its author, so none may
+	// name what fiberd gives the helper (HelperFlag). An operator's own
+	// -template command is the operator's to write.
+	if sp.Template.Dir != "" && len(sp.Template.Argv) > 1 {
+		for _, a := range sp.Template.Argv[1:] {
+			if HelperFlag(a) {
+				return backend.Warm{}, fmt.Errorf("hyperlight: template %s passes %s, which is fiberd's alone", sp.Template.Digest, a)
+			}
+		}
+	}
 	fds, err := syscall.Socketpair(syscall.AF_UNIX, syscall.SOCK_STREAM|syscall.SOCK_CLOEXEC, 0)
 	if err != nil {
 		return backend.Warm{}, fmt.Errorf("hyperlight: socketpair: %w", err)
@@ -301,6 +334,12 @@ func (b *Backend) Warm(ctx context.Context, sp backend.WarmSpec) (backend.Warm, 
 	}
 	if sp.EnginePath != "" {
 		args = append(args, "--engine", sp.EnginePath)
+	}
+	// A template whose artifact carries the guest's snapshot: the helper
+	// restores the warm instance from the read-only copy the host opened
+	// for this warm, rather than from its own guest.
+	if sp.Template.SnapshotDir != "" {
+		args = append(args, "--template-dir", sp.Template.SnapshotDir)
 	}
 	// The template command's own arguments, after the helper's; the
 	// first word is the guest's name for the helper's benefit.
@@ -864,9 +903,10 @@ func payloadHex(p []byte) string {
 func (b *Backend) FiberOverheadBytes() uint64 { return 0 }
 
 var (
-	_ backend.Backend         = (*Backend)(nil)
-	_ backend.Platformer      = (*Backend)(nil)
-	_ backend.DeadlineAdvisor = (*Backend)(nil)
-	_ backend.WReporter       = (*Backend)(nil)
-	_ backend.Overheader      = (*Backend)(nil)
+	_ backend.Backend          = (*Backend)(nil)
+	_ backend.Platformer       = (*Backend)(nil)
+	_ backend.DeadlineAdvisor  = (*Backend)(nil)
+	_ backend.WReporter        = (*Backend)(nil)
+	_ backend.Overheader       = (*Backend)(nil)
+	_ backend.SnapshotRestorer = (*Backend)(nil)
 )
