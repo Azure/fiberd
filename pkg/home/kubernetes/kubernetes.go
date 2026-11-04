@@ -288,6 +288,11 @@ func (h *Home) Name() string               { return Name }
 func (h *Home) Health() *core.SourceHealth { return h.health }
 func (h *Home) CgroupRoot() string         { return h.cgroupRoot }
 
+// SelfAdmitUID is the Pod UID, since the controller issues this Pod's
+// grant under it and a token for an earlier Pod of the same name must not
+// self-admit here.
+func (h *Home) SelfAdmitUID() string { return h.cfg.PodUID }
+
 // Ready reports whether any grant's template is warm, which is what the
 // Pod condition says once it is published.
 func (h *Home) Ready() bool { return h.gate.Ready() }
