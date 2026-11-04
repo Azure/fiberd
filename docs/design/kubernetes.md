@@ -65,14 +65,9 @@ A cluster that serves no ResourceClaims is a loss too, once the Pod's claims hav
 
 ## Security notes and known gaps
 
-The notes on namespaces and AppArmor apply to the home. The others describe the retiring example in `examples/kubernetes`, which projected each grant into its Pod as a Secret and stays only until the controller project replaces it.
-
-- `status.ready` is not the Pod's Ready condition ([routing on both](../operating-kubernetes.md#readiness-and-status)).
-- `status.endpoint` uses the primary `podIP`, while the home picks by family. On dual stack they can differ.
-- The [epoch](../glossary.md#epoch), the ledger snapshot and the audit spool live on `emptyDir`. A container restart keeps them and a Pod replacement does not, so a replacement Pod can restart at epoch 1 and repeat old [fences](../glossary.md#fence).
-- There is no finalizer and no rollout. Deleting a CapacityGrant garbage-collects its Pod at once, and a changed `spec.pod` never reaches a running Pod.
+- The [epoch](../glossary.md#epoch), the ledger snapshot and the audit spool live on `emptyDir`. A container restart keeps them and a Pod replacement does not, so a replacement Pod restarts at epoch 1 and can repeat old [fences](../glossary.md#fence).
 - A terminating namespace is scope loss. If the home sees it while fiberd [drains](../glossary.md#drain), the epoch bump ends every fiber not yet parked.
-- Discovery and the JWKS are served over plain HTTP inside the cluster.
-- runc, gVisor and Hyperlight Pods run privileged, although the capability set each needs is measured.
-- On a node whose containerd applies its default AppArmor profile, fiberd's cgroupfs and sysctl remounts are denied, so an unprivileged Pod needs `appArmorProfile: Unconfined`, which the example does not set.
-- The example's grants are not bound to a certificate. The JWT in the Secret is a bearer token until its lease ends.
+- On a node whose containerd applies its default AppArmor profile, fiberd's cgroupfs and sysctl remounts are denied. An unprivileged Pod needs `appArmorProfile: Unconfined` beside its Unconfined seccomp profile.
+- proc fibers run as fiberd's uid, so file modes cannot keep the Pod's token from them. fiberd hides the directory of `-grant-token-file` from fibers instead.
+- A privileged Pod hands fiberd's container far more than the measured set its backend needs ([sys.md](sys.md)). Which runtimes run privileged is the controller's choice.
+- Without `-client-ca`, no grant is bound to a caller certificate, and its JWT is a bearer token until its lease ends ([security.md](../security.md#grants)).
