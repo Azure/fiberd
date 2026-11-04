@@ -1130,6 +1130,11 @@ func (r *Runtime) resolveTemplate(ctx context.Context, digest string) (backend.T
 			return backend.Template{}, fmt.Errorf("%w %q: %w", ErrNoTemplate, digest, err)
 		}
 	}
+	// No backend restores a snapshot artifact's images yet, and they are
+	// never CRIU images, whatever parity would say.
+	if cfg.ImagesFormat != "" {
+		return backend.Template{}, fmt.Errorf("%w %q: its images are a %s snapshot, which backend %s does not restore", ErrNoTemplate, digest, cfg.ImagesFormat, r.be.Name())
+	}
 	// The parity gate. The executable must be for this instruction set,
 	// and if the artifact carries images (the template's pages, which
 	// every delta is computed against and every restore starts from) they
