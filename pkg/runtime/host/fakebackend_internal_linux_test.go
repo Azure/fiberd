@@ -752,6 +752,21 @@ type isolatorMixin struct{ isolates bool }
 
 func (m isolatorMixin) IsolatesTenants() bool { return m.isolates }
 
+type snapshotMixin struct{ format string }
+
+func (m snapshotMixin) ImagesFormat() string { return m.format }
+
+// snapshotBackend is a snapshot backend whose warm instance is restored
+// from the snapshot a template artifact carries, as Hyperlight's is.
+type snapshotBackend struct {
+	*fakeBackend
+	snapshotMixin
+}
+
+func newSnapshotBackend(format string) snapshotBackend {
+	return snapshotBackend{newFakeBackend(core.TierSnapshot), snapshotMixin{format}}
+}
+
 type workspaceMixin struct{ holds bool }
 
 func (m workspaceMixin) HoldsWorkspaces() bool { return m.holds }

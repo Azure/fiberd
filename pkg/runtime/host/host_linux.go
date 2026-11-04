@@ -4,6 +4,7 @@ package host
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -916,10 +917,18 @@ func (r *Runtime) PrepareTemplate(ctx context.Context, g core.Grant) error {
 			return err
 		}
 	}
-	tpl, err := r.resolveTemplate(ctx, g.TemplateDigest)
+	tpl, err := r.resolveTemplate(ctx, g.TemplateDigest, g.UID)
 	if err != nil {
 		return err
 	}
+	// A snapshot opened for this warm is its alone, and goes with a warm
+	// that never came to be. One that did is removed when it ends.
+	published := false
+	defer func() {
+		if !published {
+			removeSnapshot(tpl)
+		}
+	}()
 	// The images a resolve unpacked are held until the warm names them
 	// through a store link. Images a warm never came to name are left
 	// for the prune.
@@ -1071,6 +1080,7 @@ func (r *Runtime) PrepareTemplate(ctx context.Context, g core.Grant) error {
 	r.mu.Lock()
 	r.warms[g.UID] = z
 	r.mu.Unlock()
+	published = true
 	parentsDone() // the warm names its parent now
 	parentsDone = func() {}
 	linked = z.parentSHA != ""
@@ -1101,7 +1111,7 @@ func (r *Runtime) PrepareTemplate(ctx context.Context, g core.Grant) error {
 // resolveTemplate finds the template for a digest: the Templates map
 // first (a bare command line, no images), else the artifact pulled from
 // the registry into the cache, one directory per digest.
-func (r *Runtime) resolveTemplate(ctx context.Context, digest string) (backend.Template, error) {
+func (r *Runtime) resolveTemplate(ctx context.Context, digest, grantUID string) (backend.Template, error) {
 	if argv, ok := r.cfg.Command(digest); ok {
 		return backend.Template{Argv: argv, Digest: digest}, nil
 	}
@@ -1130,9 +1140,19 @@ func (r *Runtime) resolveTemplate(ctx context.Context, digest string) (backend.T
 			return backend.Template{}, fmt.Errorf("%w %q: %w", ErrNoTemplate, digest, err)
 		}
 	}
-	// No backend restores a snapshot artifact's images yet, and they are
-	// never CRIU images, whatever parity would say.
-	if cfg.ImagesFormat != "" {
+	// Whether the backend can warm this template at all is said before
+	// parity says anything, since no parity setting would change it. A
+	// backend that restores from a snapshot never runs a template's
+	// executable, so a registry template needs one; any other backend
+	// never restores one.
+	restores := ""
+	if sr, ok := r.be.(backend.SnapshotRestorer); ok {
+		restores = sr.ImagesFormat()
+	}
+	switch {
+	case restores != "" && cfg.ImagesFormat == "":
+		return backend.Template{}, fmt.Errorf("%w %q: backend %s warms a registry template from a %s snapshot only, and this one carries none", ErrNoTemplate, digest, r.be.Name(), restores)
+	case cfg.ImagesFormat != "" && cfg.ImagesFormat != restores:
 		return backend.Template{}, fmt.Errorf("%w %q: its images are a %s snapshot, which backend %s does not restore", ErrNoTemplate, digest, cfg.ImagesFormat, r.be.Name())
 	}
 	// The parity gate. The executable must be for this instruction set,
@@ -1159,6 +1179,13 @@ func (r *Runtime) resolveTemplate(ctx context.Context, digest string) (backend.T
 	if err := r.cfg.Parity.Check(r.host, want); err != nil {
 		return backend.Template{}, fmt.Errorf("%w: template %s built on %s: %w", ErrParity, digest[:19], cfg.Platform(), err)
 	}
+	// A snapshot the backend restores is opened for this warm alone, so
+	// nothing another warm or a later resolve does reaches it, and a
+	// snapshot in a format the backend does not restore is refused, never
+	// taken for CRIU images.
+	if cfg.ImagesFormat != "" {
+		return r.snapshotTemplate(digest, grantUID, dir, cfg)
+	}
 	// Author images are sealed to the fleet. A home that makes parents
 	// from them opens them with the master, checks their hash, and
 	// unpacks them owner-only, afresh on every resolve. Other homes leave
@@ -1180,6 +1207,42 @@ func (r *Runtime) resolveTemplate(ctx context.Context, digest string) (backend.T
 		tpl.ImagesDir = artifact.ImagesDir(dir)
 	}
 	return tpl, nil
+}
+
+// snapshotTemplate opens the artifact's snapshot into a directory of this
+// warm's own under snapshotsDir, read-only (artifact.OpenSnapshot), when
+// the backend restores its format. The name is the grant's hash and the
+// time, so a warm never opens into a copy an earlier warm of the grant
+// left or is still using. The artifact's arguments are the template's,
+// and it carries no executable to run.
+func (r *Runtime) snapshotTemplate(digest, grantUID, dir string, cfg artifact.Config) (backend.Template, error) {
+	sr, ok := r.be.(backend.SnapshotRestorer)
+	if !ok || sr.ImagesFormat() != cfg.ImagesFormat {
+		return backend.Template{}, fmt.Errorf("%w %q: its images are a %s snapshot, which backend %s does not restore", ErrNoTemplate, digest, cfg.ImagesFormat, r.be.Name())
+	}
+	if err := ownerDir(r.snapshotsDir()); err != nil {
+		return backend.Template{}, err
+	}
+	sum := sha256.Sum256([]byte(grantUID))
+	view := filepath.Join(r.snapshotsDir(), fmt.Sprintf("%x-%d", sum[:8], time.Now().UnixNano()))
+	if err := artifact.OpenSnapshot(dir, cfg, r.cfg.DeltaKeys.Seal, view); err != nil {
+		return backend.Template{}, fmt.Errorf("%w %q: cannot open its snapshot: %w", ErrNoTemplate, digest, err)
+	}
+	return backend.Template{Argv: append([]string{""}, cfg.Args...), Digest: digest, Dir: dir, SnapshotDir: view}, nil
+}
+
+// snapshotsDir holds the snapshots opened for warm instances, one
+// directory each, fiberd's alone like the template cache it sits in.
+func (r *Runtime) snapshotsDir() string { return filepath.Join(r.cfg.TemplateCache, "snapshots") }
+
+// removeSnapshot removes the snapshot a warm's template was opened with.
+func removeSnapshot(t backend.Template) {
+	if t.SnapshotDir == "" {
+		return
+	}
+	if err := artifact.RemoveSnapshot(t.SnapshotDir); err != nil {
+		log.Printf("host: remove snapshot %s: %v", t.SnapshotDir, err)
+	}
 }
 
 // usesImages reports whether this home makes parents for deltas, from an
@@ -1264,7 +1327,8 @@ func (r *Runtime) pump() {
 func (r *Runtime) warmGone(grantUID string) {
 	r.mu.Lock()
 	var ps []*pooled
-	if z := r.warms[grantUID]; z != nil {
+	z := r.warms[grantUID]
+	if z != nil {
 		ps = z.drainAll()
 	}
 	delete(r.warms, grantUID)
@@ -1281,6 +1345,9 @@ func (r *Runtime) warmGone(grantUID string) {
 	for _, f := range orphans {
 		_ = f.cg.Kill()
 		r.finish(f, "signal", "template instance exited")
+	}
+	if z != nil {
+		removeSnapshot(z.template)
 	}
 	r.pokePrune() // its parent, unless a delta names it
 	log.Printf("host: warm instance gone grant=%s", grantUID)
@@ -1305,6 +1372,7 @@ func (r *Runtime) DropTemplate(grantUID string) {
 	}
 	r.discard(ps)
 	r.be.Unwarm(z.id)
+	removeSnapshot(z.template)
 	r.dropEngineDir(grantUID)
 	for _, d := range []cgroup.Dir{z.zcg, z.fcg, z.cg} {
 		if err := d.SetMemoryMin(0); err != nil {
@@ -2634,12 +2702,20 @@ func (r *Runtime) Close() {
 	}
 	r.mu.Lock()
 	var ps []*pooled
+	var tpls []backend.Template
 	for _, z := range r.warms {
 		ps = append(ps, z.drainAll()...)
+		tpls = append(tpls, z.template)
 	}
 	r.mu.Unlock()
 	r.discard(ps)
 	r.be.Close()
+	// The warm instances end with the backend, and their exits may never
+	// be read now, so their snapshots go here rather than wait for the
+	// next start's sweep.
+	for _, t := range tpls {
+		removeSnapshot(t)
+	}
 	r.enginesMu.Lock()
 	es := make([]*engine, 0, len(r.engines))
 	for _, e := range r.engines {

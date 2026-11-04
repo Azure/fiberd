@@ -39,6 +39,11 @@ type Template struct {
 	Argv      []string
 	Dir       string // artifact directory; empty for a bare command
 	ImagesDir string // checkpoint of the warm template, when the artifact has one
+	// SnapshotDir is the template's own snapshot, opened for this warm
+	// alone and read-only, when the artifact carries one in a format the
+	// backend restores (SnapshotRestorer). The host removes it when the
+	// warm instance ends.
+	SnapshotDir string
 	// ZygoteSHA256 is the hash the host verified the executable at
 	// Argv[0] to have. A backend that runs the template somewhere other
 	// than the host (gvisor binds a copy into the sandbox) checks what it
@@ -355,6 +360,18 @@ type IDMapper interface {
 	// maps to. It fails when the grant cannot have its range on this home
 	// because an admitted grant of another key holds it.
 	MappedRoot(key string) (uint32, error)
+}
+
+// SnapshotRestorer is implemented by backends whose warm instance is
+// restored from a snapshot the template artifact carries as its images,
+// rather than made by running the template's executable. ImagesFormat is
+// the artifact.Config.ImagesFormat it restores, empty when it can restore
+// none now (a backend that offers no tier). The host opens
+// such a snapshot for each warm (Template.SnapshotDir), refuses one in a
+// format the backend does not restore, and refuses a registry template
+// that carries none, since such a backend runs no template's executable.
+type SnapshotRestorer interface {
+	ImagesFormat() string
 }
 
 // Platformer is implemented by backends whose checkpoints depend on
