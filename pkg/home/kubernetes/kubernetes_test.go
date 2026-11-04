@@ -67,7 +67,7 @@ func TestConfigValidate(t *testing.T) {
 			if (err != nil) != (c.wantErr != "") || (err != nil && !strings.Contains(err.Error(), c.wantErr)) {
 				t.Fatalf("Validate = %v, want %q", err, c.wantErr)
 			}
-			if _, err := kubernetes.New(cfg); (err != nil) != (c.wantErr != "") {
+			if _, err := kubernetes.New(t.Context(), cfg); (err != nil) != (c.wantErr != "") {
 				t.Fatalf("New = %v, want an error %v", err, c.wantErr != "")
 			}
 		})
@@ -91,7 +91,7 @@ func TestNewDefaults(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			cfg := validConfig()
 			cfg.CgroupRoot = c.cgroupRoot
-			h, err := kubernetes.New(cfg)
+			h, err := kubernetes.New(t.Context(), cfg)
 			if err != nil {
 				t.Fatalf("New: %v", err)
 			}
