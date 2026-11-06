@@ -61,22 +61,25 @@ func PlatformOf(version string) (artifact.Platform, error) {
 	return f.platform(), nil
 }
 
-// HelperFlag reports whether arg, a template argument, names one of the
+// HelperFlag reports whether arg, a template argument, is one of the
 // flags fiberd itself gives the helper (--guest, --engine, --template-dir)
-// in any spelling a flag parser takes: with one dash or more, with or
-// without =value, and, after two dashes, abbreviated as getopt_long and
-// clap let a long flag be. A template's arguments come from its author,
-// and a helper whose last flag wins would take the guest, engine or
-// snapshot the author named over fiberd's.
+// as the protocol's argument grammar reads it (hack/hyperlight/PROTOCOL.md):
+// after one dash or two, the name up to any =. A helper reads no more than
+// that grammar, so no other argument can name a flag, and a helper whose
+// last flag wins never takes the guest, engine or snapshot a template's
+// author named over fiberd's.
 func HelperFlag(arg string) bool {
-	if !strings.HasPrefix(arg, "-") {
+	name, ok := strings.CutPrefix(arg, "--")
+	if !ok {
+		name, ok = strings.CutPrefix(arg, "-")
+	}
+	if !ok {
 		return false
 	}
-	f, _, _ := strings.Cut(strings.TrimLeft(arg, "-"), "=")
-	for _, name := range []string{"guest", "engine", "template-dir"} {
-		if f == name || strings.HasPrefix(arg, "--") && f != "" && strings.HasPrefix(name, f) {
-			return true
-		}
+	name, _, _ = strings.Cut(name, "=")
+	switch name {
+	case "guest", "engine", "template-dir":
+		return true
 	}
 	return false
 }

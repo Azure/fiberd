@@ -76,11 +76,12 @@ func TestTemplateSnapshot(t *testing.T) {
 
 // TestTemplateArgsNeverNameTheSnapshot checks that a template's own
 // arguments, which its author writes, cannot pass --template-dir, --guest
-// or --engine, in any spelling a flag parser takes, so no helper takes
-// what the author named in place of what fiberd gave it.
+// or --engine, in any spelling the protocol's argument grammar reads as
+// one, so no helper takes what the author named in place of what fiberd
+// gave it.
 func TestTemplateArgsNeverNameTheSnapshot(t *testing.T) {
-	for _, a := range []string{"--template-dir", "-template-dir", "--template-dir=/etc", "-template-dir=/x", "--guest", "-guest=/etc/passwd", "--engine", "--engine=/run/other.sock",
-		"--templ=/x", "--gu", "--eng=/run/other.sock"} {
+	for _, a := range []string{"--template-dir", "-template-dir", "--template-dir=/etc", "-template-dir=/x", "--guest", "-guest=/etc/passwd", "--engine", "-engine",
+		"--engine=/run/other.sock"} {
 		t.Run(a, func(t *testing.T) {
 			s := restoring(kvmIntel)
 			be := newFake(t, Options{Helper: "helper"}, s)
@@ -125,10 +126,17 @@ func TestAnOperatorsTemplateMayPassHelperFlags(t *testing.T) {
 	}
 }
 
+// TestHelperFlag checks that HelperFlag takes exactly what the protocol's
+// argument grammar reads as one of fiberd's flags: one dash or two, the
+// name, then = and a value or nothing. Three dashes, an abbreviation, a
+// name with more after it and a bare dash are no flag of the grammar's,
+// and so no helper's.
 func TestHelperFlag(t *testing.T) {
 	for arg, want := range map[string]bool{
-		"--template-dir": true, "-template-dir=/x": true, "--templ": true, "--te=/x": true, "--guest": true, "---guest": true, "--gu": true, "--engine=/e": true,
-		"--g": true, "--e=/e": true, "--t": true, "guest": false, "-e": false, "-gu": false, "--port-range": false, "--heap-mb": false, "--init-ms": false, "-": false, "--": false,
+		"--template-dir": true, "-template-dir": true, "--template-dir=/x": true, "-template-dir=/x": true, "--guest": true, "-guest": true, "--guest=": true,
+		"-guest=/etc": true, "--engine": true, "-engine": true, "--engine=/e": true, "--engine==/e": true,
+		"---guest": false, "--gu": false, "--templ": false, "--te=/x": false, "--g": false, "-g": false, "--e=/e": false, "--guests": false, "--guest-x": false,
+		"--Guest": false, "guest": false, "/guest": false, "--=guest": false, "-": false, "--": false, "--port-range": false, "--heap-mb": false, "--init-ms": false,
 	} {
 		if got := HelperFlag(arg); got != want {
 			t.Errorf("HelperFlag(%q) = %v, want %v", arg, got, want)
