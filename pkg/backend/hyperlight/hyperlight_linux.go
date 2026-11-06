@@ -141,7 +141,7 @@ type execStarter struct{ helper string }
 
 // command keeps the container's environment, unlike every other program
 // fiberd starts (pkg/sys/helper). A deployment's settings reach the helper
-// that way, and the Hyperlight runtime keeps no capabilities.
+// that way. It holds no capabilities beyond the ones a device engine adds.
 func (s execStarter) command(ctx context.Context, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, s.helper, args...)
 	cmd.Env = os.Environ()
