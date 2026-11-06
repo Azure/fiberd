@@ -78,6 +78,9 @@ type Runtime struct {
 	// a local fiber's. The holder keeps the name until its end.
 	socks map[string]string
 	exits chan core.FiberExit
+	// preparing holds the grants a PrepareTemplate is warming, each
+	// closed when that prepare returns.
+	preparing map[string]chan struct{}
 	// poolExits names the grant of every pooled sandbox that dies before
 	// its hand-out.
 	poolExits chan string
@@ -903,12 +906,40 @@ func (r *Runtime) PrepareTemplate(ctx context.Context, g core.Grant) error {
 			return err
 		}
 	}
-	r.mu.Lock()
-	if _, ok := r.warms[g.UID]; ok {
+	// One prepare per grant runs at a time. Concurrent clones that warm
+	// the grant on demand, after its instance ended say, would each open
+	// a snapshot and start an instance, and the last to publish would
+	// leave the others' behind. A caller that finds one running waits for
+	// it and takes its warm, or tries itself if that one failed.
+	for {
+		r.mu.Lock()
+		if _, ok := r.warms[g.UID]; ok {
+			r.mu.Unlock()
+			return nil
+		}
+		running, ok := r.preparing[g.UID]
+		if !ok {
+			break
+		}
 		r.mu.Unlock()
-		return nil
+		select {
+		case <-running:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
 	}
+	if r.preparing == nil {
+		r.preparing = map[string]chan struct{}{}
+	}
+	done := make(chan struct{})
+	r.preparing[g.UID] = done
 	r.mu.Unlock()
+	defer func() {
+		r.mu.Lock()
+		delete(r.preparing, g.UID)
+		r.mu.Unlock()
+		close(done)
+	}()
 	if m, ok := r.be.(backend.IDMapper); ok {
 		// Before anything is made for the grant. A grant whose id range
 		// an admitted grant of another range key holds cannot run on

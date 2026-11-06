@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/google/go-containerregistry/pkg/registry"
 
@@ -222,5 +223,53 @@ func TestCloseRemovesSnapshots(t *testing.T) {
 	rt.Close()
 	if !gone(s.Template.SnapshotDir) {
 		t.Fatal("Close left a warm's snapshot")
+	}
+}
+
+// TestPrepareTemplateIsSingleFlight checks that concurrent prepares of
+// one grant, as concurrent clones that warm it on demand after its
+// instance ended make, warm it once and open one snapshot, which goes
+// with that warm.
+func TestPrepareTemplateIsSingleFlight(t *testing.T) {
+	reg := newTemplateRegistry(t)
+	hl := snapshotArtifact(t, reg, hlHost)
+	be := newSnapshotBackend(artifact.ImagesFormatHyperlight)
+	gate := make(chan struct{})
+	be.warmGate = gate
+	rt := newTestRuntime(t, be, func(c *Config) {
+		c.Templates, c.Registry, c.Platform, c.DeltaKeys.Seal = nil, reg+"/tmpl/x", hlHost, templateMaster
+	})
+	g := core.Grant{UID: "g1", TemplateDigest: hl, WBudgetBytes: 64 << 20}
+	const callers = 4
+	errs := make(chan error, callers)
+	for range callers {
+		go func() { errs <- rt.PrepareTemplate(context.Background(), g) }()
+	}
+	waitFor(t, "a prepare to reach the backend", func() bool {
+		be.mu.Lock()
+		defer be.mu.Unlock()
+		return be.warmCalls > 0
+	})
+	// The others would reach Warm in this time if they ran beside it.
+	time.Sleep(100 * time.Millisecond)
+	close(gate)
+	for range callers {
+		if err := <-errs; err != nil {
+			t.Fatalf("PrepareTemplate: %v", err)
+		}
+	}
+	be.mu.Lock()
+	calls := be.warmCalls
+	be.mu.Unlock()
+	if calls != 1 {
+		t.Fatalf("%d warms for one grant", calls)
+	}
+	ents, _ := os.ReadDir(rt.snapshotsDir())
+	if len(ents) != 1 {
+		t.Fatalf("%d snapshots opened for one grant", len(ents))
+	}
+	rt.DropTemplate("g1")
+	if ents, _ := os.ReadDir(rt.snapshotsDir()); len(ents) != 0 {
+		t.Fatalf("%d snapshots left after the warm was dropped", len(ents))
 	}
 }

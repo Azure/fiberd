@@ -72,6 +72,9 @@ type fakeBackend struct {
 	// Knobs a test sets before calling the runtime.
 	warmErr, cloneErr, parkErr, resumeErr error
 	warm                                  backend.Warm
+	// warmGate, when set, holds every Warm after it is counted until the
+	// channel is closed.
+	warmGate chan struct{}
 	// footprint is what Clone, Bind and Resume report as the leaf's own
 	// count before the hand-out.
 	footprint uint64
@@ -117,8 +120,14 @@ func (b *fakeBackend) Warm(_ context.Context, spec backend.WarmSpec) (backend.Wa
 	enter(spec.CgroupFD)
 	enter(spec.ProbeCgroupFD)
 	b.mu.Lock()
-	defer b.mu.Unlock()
 	b.warmCalls++
+	gate := b.warmGate
+	b.mu.Unlock()
+	if gate != nil {
+		<-gate
+	}
+	b.mu.Lock()
+	defer b.mu.Unlock()
 	if b.warmErr != nil {
 		return backend.Warm{}, b.warmErr
 	}
