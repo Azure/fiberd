@@ -19,7 +19,7 @@
 //!
 //!   hyperlight-helper --guest <path> [--heap-mb N] [--engine <sock>]  (fd 3 = control)
 //!   hyperlight-helper --guest <path> --check           (self-test, no fd 3)
-//!   hyperlight-helper --version                        (the snapshot facts)
+//!   hyperlight-helper --version                        (the snapshot facts, and nothing more)
 
 use std::collections::HashMap;
 use std::fs::File;
@@ -123,6 +123,9 @@ fn parse_args() -> Result<Args> {
     while let Some(k) = it.next() {
         match k.as_str() {
             "--version" => {
+                // The facts alone. No `template-dir` line follows them,
+                // since this helper refuses `--template-dir` (below), so
+                // fiberd never hands it a template's snapshot.
                 println!("{}", facts());
                 std::process::exit(0);
             }

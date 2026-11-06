@@ -64,7 +64,7 @@ func TestPlatform(t *testing.T) {
 	}{
 		{name: "a usable helper", starter: says(kvmIntel),
 			want: artifact.Platform{Kernel: "hyperlight-hyperlight_host/0.17.0", Libc: "fiberd-hyperlight-helper/0.1.0+kvm+GenuineIntel"}},
-		{name: "the fake helper", starter: says(fake), want: artifact.Platform{Kernel: "hyperlight-none", Libc: "fakehelper/3+none+none"}},
+		{name: "the fake helper", starter: says(fake), want: artifact.Platform{Kernel: "hyperlight-none", Libc: "fakehelper/4+none+none"}},
 		{name: "no usable helper", starter: &fakeStarter{versionErr: errors.New("exit status 1")}, want: artifact.Platform{Kernel: "hyperlight-unusable", Libc: "n/a"}},
 	}
 	for _, tc := range cases {

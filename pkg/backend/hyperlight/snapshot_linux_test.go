@@ -9,27 +9,57 @@ import (
 	"strings"
 	"testing"
 
+	fakehelper "github.com/Azure/fiberd/hack/hyperlight/fakehelper/helper"
 	"github.com/Azure/fiberd/pkg/artifact"
 	"github.com/Azure/fiberd/pkg/backend"
 )
 
-// TestTemplateSnapshot checks that a usable helper says it restores
-// Hyperlight snapshots and an unusable one none, and that a template's
-// snapshot reaches the helper as --template-dir, after the helper's own
-// arguments and before the template's.
+// restoring is a fake starter whose helper reports facts and, on
+// --version, the line that advertises it restores a template's snapshot.
+func restoring(facts string) *fakeStarter {
+	s := says(facts)
+	s.version += "\n" + restoresLine
+	return s
+}
+
+// TestTemplateSnapshot checks that a usable helper that advertises it
+// restores Hyperlight snapshots says so, and any other none, that
+// --template-dir never reaches a helper that did not advertise it, and
+// that a template's snapshot reaches one that did as --template-dir, after
+// the helper's own arguments and before the template's.
 func TestTemplateSnapshot(t *testing.T) {
 	t.Run("the format a helper restores", func(t *testing.T) {
-		if got := newFake(t, Options{Helper: "helper"}, says(kvmIntel)).ImagesFormat(); got != artifact.ImagesFormatHyperlight {
-			t.Errorf("a usable helper restores %q", got)
+		for name, tc := range map[string]struct {
+			s    *fakeStarter
+			want string
+		}{
+			"a usable helper that advertises it":       {restoring(kvmIntel), artifact.ImagesFormatHyperlight},
+			"the fake helper":                          {&fakeStarter{version: fakehelper.Version}, artifact.ImagesFormatHyperlight},
+			"a usable helper that does not":            {says(kvmIntel), ""},
+			"a helper that names it on the facts line": {says(kvmIntel + " " + restoresLine), ""},
+			"an unusable helper":                       {&fakeStarter{version: kvmIntel + "\n" + restoresLine, versionErr: errors.New("exit status 1")}, ""},
+		} {
+			if got := newFake(t, Options{Helper: "helper"}, tc.s).ImagesFormat(); got != tc.want {
+				t.Errorf("%s restores %q, want %q", name, got, tc.want)
+			}
 		}
-		if got := newFake(t, Options{Helper: "helper"}, &fakeStarter{versionErr: errors.New("exit status 1")}).ImagesFormat(); got != "" {
-			t.Errorf("an unusable helper restores %q", got)
+	})
+	t.Run("a helper that does not advertise it is never given a snapshot", func(t *testing.T) {
+		s := says(kvmIntel)
+		be := newFake(t, Options{Helper: "helper"}, s)
+		sp := warmSpec(filepath.Join(t.TempDir(), "run", "g1"))
+		sp.Template = backend.Template{Digest: "sha256:t", Argv: []string{""}, Dir: "/cache/t", SnapshotDir: t.TempDir()}
+		if _, err := be.Warm(warmCtx(t), sp); err == nil || !strings.Contains(err.Error(), "does not advertise template-dir") {
+			t.Fatalf("Warm = %v, want the snapshot refused", err)
+		}
+		if n := len(s.started()); n != 0 {
+			t.Fatalf("%d helpers started", n)
 		}
 	})
 	t.Run("the helper is given the snapshot", func(t *testing.T) {
 		snap := t.TempDir()
 		engine := filepath.Join(t.TempDir(), "engine.sock")
-		s := says(kvmIntel)
+		s := restoring(kvmIntel)
 		be := newFake(t, Options{Helper: "helper"}, s)
 		sp := warmSpec(filepath.Join(t.TempDir(), "run", "g1"))
 		sp.EnginePath = engine
@@ -52,7 +82,7 @@ func TestTemplateArgsNeverNameTheSnapshot(t *testing.T) {
 	for _, a := range []string{"--template-dir", "-template-dir", "--template-dir=/etc", "-template-dir=/x", "--guest", "-guest=/etc/passwd", "--engine", "--engine=/run/other.sock",
 		"--templ=/x", "--gu", "--eng=/run/other.sock"} {
 		t.Run(a, func(t *testing.T) {
-			s := says(kvmIntel)
+			s := restoring(kvmIntel)
 			be := newFake(t, Options{Helper: "helper"}, s)
 			sp := warmSpec(filepath.Join(t.TempDir(), "run", "g1"))
 			sp.Template = backend.Template{Digest: "sha256:t", Argv: []string{"", a, "/elsewhere"}, Dir: "/cache/t", SnapshotDir: t.TempDir()}

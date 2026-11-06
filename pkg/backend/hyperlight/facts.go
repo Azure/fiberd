@@ -13,7 +13,7 @@ var ErrHelper = errors.New("hyperlight: helper error")
 // facts is what a helper's snapshots depend on. The helper reports it on
 // `--version` and on READY as one token each, in this order.
 //
-//	helper      the helper and its version ("fiberd-hyperlight-helper/0.3.0")
+//	helper      the helper and its version ("fiberd-hyperlight-helper/0.4.0")
 //	hyperlight  the hyperlight_host crate the helper was built with
 //	hypervisor  the one in use on this host (kvm, mshv)
 //	cpu         the CPU vendor string (GenuineIntel, AuthenticAMD)

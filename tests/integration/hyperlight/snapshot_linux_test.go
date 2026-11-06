@@ -4,12 +4,14 @@ package hyperlighttest
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -21,12 +23,12 @@ import (
 	"github.com/Azure/fiberd/pkg/runtime/host"
 )
 
-// TestTemplateSnapshotThroughTheHelper runs a template whose artifact
-// carries the guest's snapshot end to end: built with the helper's facts
-// as its platform, sealed, pushed, pulled by a home, opened for the warm
-// as a read-only copy, handed to the helper as --template-dir, served by a
-// fiber, and removed once the warm ends.
-func TestTemplateSnapshotThroughTheHelper(t *testing.T) {
+// snapshotHome builds a template artifact carrying a guest's snapshot,
+// with the facts of the helper at helperBin as its platform, sealed and
+// pushed, and opens a home whose backend runs helper. It returns the home,
+// the template's digest and the home's template cache.
+func snapshotHome(t *testing.T, helper string) (*host.Runtime, string, string) {
+	t.Helper()
 	ctx := context.Background()
 	srv := httptest.NewServer(registry.New())
 	t.Cleanup(srv.Close)
@@ -68,7 +70,7 @@ func TestTemplateSnapshotThroughTheHelper(t *testing.T) {
 	name := fmt.Sprintf("hs%d", time.Now().UnixNano()%1_000_000)
 	cache := filepath.Join(t.TempDir(), "templates")
 	rt, err := host.New(host.Config{
-		Backend:       hlbackend.New(hlbackend.Options{Helper: helperBin, Guest: guest}),
+		Backend:       hlbackend.New(hlbackend.Options{Helper: helper, Guest: guest}),
 		Registry:      srv.URL + "/tmpl/hl",
 		DeltaKeys:     artifact.Keys{Seal: master},
 		CgroupRoot:    filepath.Join(cgRoot, name),
@@ -80,6 +82,17 @@ func TestTemplateSnapshotThroughTheHelper(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(rt.Close)
+	return rt, digest, cache
+}
+
+// TestTemplateSnapshotThroughTheHelper runs a template whose artifact
+// carries the guest's snapshot end to end: built with the helper's facts
+// as its platform, sealed, pushed, pulled by a home, opened for the warm
+// as a read-only copy, handed to the helper as --template-dir, served by a
+// fiber, and removed once the warm ends.
+func TestTemplateSnapshotThroughTheHelper(t *testing.T) {
+	ctx := context.Background()
+	rt, digest, cache := snapshotHome(t, helperBin)
 	g := core.Grant{UID: "g1", TemplateDigest: digest, FiberMax: 2, WBudgetBytes: 8 << 20}
 	if err := rt.PrepareTemplate(ctx, g); err != nil {
 		t.Fatalf("prepare: %v", err)
@@ -101,5 +114,36 @@ func TestTemplateSnapshotThroughTheHelper(t *testing.T) {
 	rt.DropTemplate("g1")
 	if snaps, _ := os.ReadDir(filepath.Join(cache, "snapshots")); len(snaps) != 0 {
 		t.Fatalf("%d snapshots left after the warm ended", len(snaps))
+	}
+}
+
+// TestTemplateSnapshotNeedsAHelperThatAdvertisesIt runs the same template
+// on a home whose helper prints the same facts but not the template-dir
+// line: the home refuses the template, opens no snapshot and starts no
+// helper, so --template-dir never reaches a helper that did not claim it.
+func TestTemplateSnapshotNeedsAHelperThatAdvertisesIt(t *testing.T) {
+	dir := t.TempDir()
+	started := filepath.Join(dir, "started")
+	bin := filepath.Join(dir, "helper")
+	script := "#!/bin/sh\n" +
+		"if [ \"$1\" = --version ]; then\n" +
+		"  '" + helperBin + "' --version | head -n 1\n" +
+		"  exit 0\n" +
+		"fi\n" +
+		"touch '" + started + "'\n" +
+		"exec '" + helperBin + "' \"$@\"\n"
+	if err := os.WriteFile(bin, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	rt, digest, cache := snapshotHome(t, bin)
+	err := rt.PrepareTemplate(context.Background(), core.Grant{UID: "g1", TemplateDigest: digest, FiberMax: 2, WBudgetBytes: 8 << 20})
+	if !errors.Is(err, host.ErrNoTemplate) || !strings.Contains(err.Error(), "does not restore") {
+		t.Fatalf("prepare = %v, want the template refused", err)
+	}
+	if snaps, _ := os.ReadDir(filepath.Join(cache, "snapshots")); len(snaps) != 0 {
+		t.Fatalf("%d snapshots opened for a helper that restores none", len(snaps))
+	}
+	if _, err := os.Stat(started); err == nil {
+		t.Fatal("the helper was started")
 	}
 }

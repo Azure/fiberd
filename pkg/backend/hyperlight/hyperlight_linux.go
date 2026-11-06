@@ -149,6 +149,9 @@ type Backend struct {
 	tier    core.Tier
 	why     error // why tier is unspecified, nil when it is not
 	facts   facts // from `helper --version` at open, and every READY must agree
+	// restores is set when `helper --version` advertises the template-dir
+	// line, and only then is the helper given --template-dir.
+	restores bool
 
 	mu     sync.Mutex
 	warms  map[string]*helper
@@ -201,7 +204,7 @@ func newBackend(o Options, start starter) *Backend {
 		start = execStarter{o.Helper}
 	}
 	b := &Backend{opt: o, starter: start, warms: map[string]*helper{}, fibers: map[string]*fiber{}, exits: make(chan backend.Exit, 1024)}
-	f, err := probeFacts(start)
+	f, restores, err := probeFacts(start)
 	if err != nil {
 		b.why = fmt.Errorf("helper %s unusable: %w", o.Helper, err)
 		return b
@@ -212,7 +215,7 @@ func newBackend(o Options, start starter) *Backend {
 			return b
 		}
 	}
-	b.facts = f
+	b.facts, b.restores = f, restores
 	b.tier = core.TierSnapshot
 	return b
 }
@@ -222,17 +225,31 @@ func newBackend(o Options, start starter) *Backend {
 func (b *Backend) ProbeErr() error { return b.why }
 
 // probeFacts runs `helper --version` for the facts a snapshot through
-// this helper depends on. They are known before any grant is warmed,
-// because the host records them at open.
-func probeFacts(start starter) (facts, error) {
+// this helper depends on, and whether it advertises that it restores a
+// template's snapshot (restoresLine). They are known before any grant is
+// warmed, because the host records them at open.
+func probeFacts(start starter) (facts, bool, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), versionTimeout)
 	defer cancel()
 	out, err := start.Version(ctx)
 	if err != nil {
-		return facts{}, fmt.Errorf("--version: %w", err)
+		return facts{}, false, fmt.Errorf("--version: %w", err)
 	}
-	return parseFacts(strings.Fields(strings.SplitN(out, "\n", 2)[0]))
+	first, rest, _ := strings.Cut(out, "\n")
+	f, err := parseFacts(strings.Fields(first))
+	if err != nil {
+		return facts{}, false, err
+	}
+	restores := false
+	for _, l := range strings.Split(rest, "\n") {
+		restores = restores || strings.TrimSpace(l) == restoresLine
+	}
+	return f, restores, nil
 }
+
+// restoresLine is the line after the facts on `helper --version` of a
+// helper that restores a template's snapshot given as --template-dir.
+const restoresLine = "template-dir"
 
 func (b *Backend) Name() string    { return "hyperlight" }
 func (b *Backend) Tier() core.Tier { return b.tier }
@@ -242,11 +259,13 @@ func (b *Backend) Tier() core.Tier { return b.tier }
 func (b *Backend) IsolatesTenants() bool { return true }
 
 // ImagesFormat implements backend.SnapshotRestorer: the helper restores a
-// Hyperlight snapshot a template artifact carries (--template-dir), once
-// it is usable. An unusable helper restores none, so the host refuses
-// such a template rather than open its snapshot for nothing.
+// Hyperlight snapshot a template artifact carries (--template-dir) when it
+// is usable and its --version says so (restoresLine). Any other helper
+// restores none, so the host refuses such a template rather than open its
+// snapshot for a helper that might ignore the flag and warm its own guest
+// under the template's digest.
 func (b *Backend) ImagesFormat() string {
-	if b.tier < core.TierSnapshot {
+	if b.tier < core.TierSnapshot || !b.restores {
 		return ""
 	}
 	return artifact.ImagesFormatHyperlight
@@ -303,6 +322,11 @@ func (b *Backend) FiberW(fiberID string) (uint64, bool) {
 func (b *Backend) Warm(ctx context.Context, sp backend.WarmSpec) (backend.Warm, error) {
 	if b.tier < core.TierSnapshot {
 		return backend.Warm{}, errors.New("hyperlight: helper or guest unavailable")
+	}
+	// --template-dir reaches only a helper that advertised it, whatever the
+	// caller asks, since one that ignores it would warm its own guest.
+	if sp.Template.SnapshotDir != "" && !b.restores {
+		return backend.Warm{}, fmt.Errorf("hyperlight: helper %s does not advertise %s on --version, so it is never given a template's snapshot", b.opt.Helper, restoresLine)
 	}
 	// A registry template is warmed from its snapshot or not at all: the
 	// helper never runs a template's executable, so one without a snapshot

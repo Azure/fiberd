@@ -26,7 +26,12 @@ import (
 
 // Facts mirrors the Rust helper's snapshot facts (helper, hyperlight_host,
 // hypervisor, cpu). The fake has none of the last three.
-const Facts = "fakehelper/3 none none none"
+const Facts = "fakehelper/4 none none none"
+
+// Version is what `fakehelper --version` prints: the facts, then the line
+// that advertises it restores a template's snapshot given as
+// --template-dir (hack/hyperlight/PROTOCOL.md).
+const Version = Facts + "\ntemplate-dir"
 
 // SeedBytes is the seed every CLONE and RESUME carries, as hex.
 const SeedBytes = 32
