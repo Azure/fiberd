@@ -156,6 +156,7 @@ type warm struct {
 	digest   string
 	template backend.Template
 	id       string // backend handle
+	instance uint64 // backend.Warm.Instance, which its Exit carries
 	pid      int
 	bytes    uint64 // one fiber's fixed footprint in the W counter (0: none)
 	total    uint64 // one fiber's whole footprint, for its leaf's memory.max
@@ -1045,7 +1046,7 @@ func (r *Runtime) PrepareTemplate(ctx context.Context, g core.Grant) error {
 		}
 		return err
 	}
-	z := &warm{grantUID: g.UID, digest: g.TemplateDigest, template: tpl, id: w.ID, pid: w.PID, cg: gcg, fcg: fcg, zcg: zcg}
+	z := &warm{grantUID: g.UID, digest: g.TemplateDigest, template: tpl, id: w.ID, instance: w.Instance, pid: w.PID, cg: gcg, fcg: fcg, zcg: zcg}
 
 	// The parent pages for deltas: the artifact's checkpoint when there
 	// is one; otherwise checkpoint the warm instance now, leaving it
@@ -1329,7 +1330,7 @@ func (r *Runtime) pump() {
 			r.pooledGone(e.PooledID, e.Status)
 			continue
 		case e.FiberID == "":
-			r.warmGone(e.WarmID)
+			r.warmGone(e.WarmID, e.Instance)
 			continue
 		}
 		r.mu.Lock()
@@ -1355,10 +1356,19 @@ func (r *Runtime) pump() {
 	}
 }
 
-func (r *Runtime) warmGone(grantUID string) {
+// warmGone ends a grant's warm instance, the one numbered instance. The
+// end of an instance the host dropped can come after a later warm of the
+// grant took its place, and is ignored, so it never takes the later one's
+// fibers or snapshot.
+func (r *Runtime) warmGone(grantUID string, instance uint64) {
 	r.mu.Lock()
 	var ps []*pooled
 	z := r.warms[grantUID]
+	if z != nil && z.instance != instance {
+		r.mu.Unlock()
+		log.Printf("host: ignored the end of a dropped warm instance grant=%s instance=%d, warm is %d", grantUID, instance, z.instance)
+		return
+	}
 	if z != nil {
 		ps = z.drainAll()
 	}

@@ -41,6 +41,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -153,6 +154,9 @@ type Backend struct {
 	// line, and only then is the helper given --template-dir.
 	restores bool
 
+	// instances numbers the helpers Warm starts (helper.instance).
+	instances atomic.Uint64
+
 	mu     sync.Mutex
 	warms  map[string]*helper
 	fibers map[string]*fiber // fence
@@ -166,6 +170,9 @@ type helper struct {
 	pmu  sync.Mutex
 	pend map[string]chan reply // fence -> reply
 	gone chan struct{}
+	// instance tells this helper from another warm of the grant, which
+	// shares id, on its Exit.
+	instance uint64
 	// cloneTook is how long the probe clone at warm took from CLONE to
 	// CLONED, 0 when it measured nothing (DefaultDeadlines). published is
 	// set once Warm hands the instance to the host, and only then does
@@ -396,7 +403,7 @@ func (b *Backend) Warm(ctx context.Context, sp backend.WarmSpec) (backend.Warm, 
 		return backend.Warm{}, err
 	}
 	uc, _ := conn.(*net.UnixConn)
-	h := &helper{id: sp.GrantUID, proc: proc, ctl: uc, pend: map[string]chan reply{}, gone: make(chan struct{})}
+	h := &helper{id: sp.GrantUID, instance: b.instances.Add(1), proc: proc, ctl: uc, pend: map[string]chan reply{}, gone: make(chan struct{})}
 
 	ready := make(chan error, 1)
 	rd := bufio.NewReaderSize(uc, 64<<10)
@@ -468,7 +475,7 @@ func (b *Backend) Warm(ctx context.Context, sp backend.WarmSpec) (backend.Warm, 
 		log.Printf("hyperlight: template of %s sized from a probe of %s, default deadlines create=%s resume=%s", h.id, took.Round(time.Millisecond),
 			sizeDeadline(took, createDeadline), sizeDeadline(took, resumeDeadline))
 	}
-	return backend.Warm{ID: h.id, PID: proc.Pid()}, nil
+	return backend.Warm{ID: h.id, PID: proc.Pid(), Instance: h.instance}, nil
 }
 
 // probeClone makes one fiber from the warm snapshot, ends it, and returns
@@ -694,7 +701,7 @@ func (b *Backend) helperGone(h *helper) {
 		b.exits <- backend.Exit{FiberID: id, Status: "signal:helper"}
 	}
 	if published {
-		b.exits <- backend.Exit{WarmID: h.id, Status: "helper exited"}
+		b.exits <- backend.Exit{WarmID: h.id, Instance: h.instance, Status: "helper exited"}
 	}
 }
 

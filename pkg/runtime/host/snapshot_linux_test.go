@@ -273,3 +273,47 @@ func TestPrepareTemplateIsSingleFlight(t *testing.T) {
 		t.Fatalf("%d snapshots left after the warm was dropped", len(ents))
 	}
 }
+
+// TestADroppedWarmsEndLeavesItsSuccessor checks that the end of a warm
+// instance the host dropped, which a backend that names warms by grant
+// reports after a re-warm of the grant has the same WarmID, does not end
+// the re-warm or remove its snapshot.
+func TestADroppedWarmsEndLeavesItsSuccessor(t *testing.T) {
+	ctx := context.Background()
+	reg := newTemplateRegistry(t)
+	hl := snapshotArtifact(t, reg, hlHost)
+	be := newSnapshotBackend(artifact.ImagesFormatHyperlight)
+	rt := newTestRuntime(t, be, func(c *Config) {
+		c.Templates, c.Registry, c.Platform, c.DeltaKeys.Seal = nil, reg+"/tmpl/x", hlHost, templateMaster
+	})
+	prepare := func(uid string) backend.WarmSpec {
+		t.Helper()
+		if err := rt.PrepareTemplate(ctx, core.Grant{UID: uid, TemplateDigest: hl, WBudgetBytes: 64 << 20}); err != nil {
+			t.Fatalf("PrepareTemplate %s: %v", uid, err)
+		}
+		s, _ := be.warmSpec(uid)
+		return s
+	}
+	prepare("g1")
+	rt.mu.Lock()
+	dropped := rt.warms["g1"].instance
+	rt.mu.Unlock()
+	rt.DropTemplate("g1")
+	successor := prepare("g1").Template.SnapshotDir
+	other := prepare("g2").Template.SnapshotDir
+
+	be.exits <- backend.Exit{WarmID: "g1", Instance: dropped, Status: "helper exited"}
+	// The pump reads exits in order, so once g2's end is handled the
+	// dropped instance's was too.
+	be.warmGone("g2")
+	waitFor(t, "g2's snapshot to go", func() bool { return gone(other) })
+	rt.mu.Lock()
+	_, warm := rt.warms["g1"]
+	rt.mu.Unlock()
+	if !warm || gone(successor) {
+		t.Fatalf("the dropped instance's end took its successor (warm %v, snapshot gone %v)", warm, gone(successor))
+	}
+	// The successor's own end still goes.
+	be.warmGone("g1")
+	waitFor(t, "the successor's snapshot to go", func() bool { return gone(successor) })
+}

@@ -61,6 +61,8 @@ type fakeBackend struct {
 	unwarmed []string
 	closed   bool
 	nextPID  int
+	// instances is the Warm.Instance of each grant's latest warm.
+	instances map[string]uint64
 	// warmCalls counts Warm calls, idempotent prepares included.
 	warmCalls int
 	// resumeCalls counts Resume calls, refused ones included.
@@ -134,7 +136,13 @@ func (b *fakeBackend) Warm(_ context.Context, spec backend.WarmSpec) (backend.Wa
 	b.warms[spec.GrantUID] = spec
 	b.nextPID++
 	w := b.warm
-	w.ID, w.PID = spec.GrantUID, b.nextPID
+	// Warms are named by grant, as Hyperlight's are, and told apart by
+	// their instance.
+	w.ID, w.PID, w.Instance = spec.GrantUID, b.nextPID, uint64(b.nextPID)
+	if b.instances == nil {
+		b.instances = map[string]uint64{}
+	}
+	b.instances[spec.GrantUID] = w.Instance
 	return w, nil
 }
 
@@ -402,9 +410,12 @@ func (b *fakeBackend) die(fiberID, status string) {
 	b.exits <- backend.Exit{FiberID: fiberID, Status: status}
 }
 
-// warmGone reports the end of a grant's warm instance.
+// warmGone reports the end of a grant's latest warm instance.
 func (b *fakeBackend) warmGone(grantUID string) {
-	b.exits <- backend.Exit{WarmID: grantUID}
+	b.mu.Lock()
+	instance := b.instances[grantUID]
+	b.mu.Unlock()
+	b.exits <- backend.Exit{WarmID: grantUID, Instance: instance}
 }
 
 func (b *fakeBackend) fiber(id string) *fakeFiber {
