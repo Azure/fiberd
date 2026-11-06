@@ -427,6 +427,16 @@ func TestBuildHyperlight(t *testing.T) {
 			t.Errorf("inspect %s = %d %q %q, want a verdict with %q", c.name, code, stdout, stderr, c.want)
 		}
 	}
+	// An architecture without a helper's facts judges nothing, and is
+	// refused rather than ignored, as is an architecture homes do not run.
+	for _, bad := range [][]string{{"-hyperlight-arch", "arm64"}, {"-hyperlight-facts", facts, "-hyperlight-arch", "x86_64"}} {
+		if code, stdout, stderr := call(append([]string{"inspect", "-dir", out}, bad...)...); code != 1 || stdout != "" || stderr == "" {
+			t.Errorf("inspect %q = %d %q %q, want it refused", bad, code, stdout, stderr)
+		}
+	}
+	if _, _, stderr := call("inspect", "-dir", out, "-hyperlight-arch", "arm64"); !strings.Contains(stderr, "goes with -hyperlight-helper or -hyperlight-facts") {
+		t.Errorf("inspect -hyperlight-arch alone says %q", stderr)
+	}
 	same := filepath.Join(t.TempDir(), "art")
 	if code, _, stderr := call("build", "-hyperlight-snapshot", snap, "-hyperlight-facts", facts, "-hyperlight-arch", here.Arch, "-seal-to", pub, "-out", same); code != 0 {
 		t.Fatalf("build = %d %q", code, stderr)

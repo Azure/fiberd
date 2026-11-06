@@ -235,6 +235,11 @@ func inspect(host artifact.Platform, args []string, stdout, stderr io.Writer) er
 	if *dir == "" {
 		return fmt.Errorf("inspect: -dir is required")
 	}
+	// The architecture names the homes a helper's facts are judged on, so
+	// alone it judges nothing, and is refused rather than ignored.
+	if *hlArch != "" && *hlHelper == "" && *hlFacts == "" {
+		return fmt.Errorf("inspect: -hyperlight-arch goes with -hyperlight-helper or -hyperlight-facts")
+	}
 	cfg, err := artifact.ReadConfig(*dir)
 	if err != nil {
 		return err
@@ -260,12 +265,13 @@ func inspect(host artifact.Platform, args []string, stdout, stderr io.Writer) er
 	if cfg.ImagesFormat == artifact.ImagesFormatHyperlight {
 		// A Hyperlight home's platform is its helper's facts, not this
 		// host's kernel and libc.
-		switch hp, err := helperPlatform(context.Background(), *hlHelper, *hlFacts, *hlArch, host); {
-		case *hlHelper == "" && *hlFacts == "":
+		if *hlHelper == "" && *hlFacts == "" {
 			verdict, judge = "a Hyperlight snapshot: judge it against a helper with -hyperlight-helper or -hyperlight-facts", false
-		case err != nil:
-			return fmt.Errorf("inspect: %w", err)
-		default:
+		} else {
+			hp, err := helperPlatform(context.Background(), *hlHelper, *hlFacts, *hlArch, host)
+			if err != nil {
+				return fmt.Errorf("inspect: %w", err)
+			}
 			host = hp
 		}
 	}
