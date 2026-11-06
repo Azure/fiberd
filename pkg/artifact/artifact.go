@@ -267,7 +267,8 @@ func Push(ctx context.Context, dir, ref string) (string, error) {
 }
 
 // Pull downloads the artifact at repo@digest (or repo:tag) into dst. The
-// manifest digest is verified by the transfer. Sealed images stay sealed.
+// manifest digest is verified by the transfer, and the directory must pack
+// to it, as Reverify holds it at every warm. Sealed images stay sealed.
 // A home opens them with UnpackImages.
 func Pull(ctx context.Context, ref, dst string) (Config, error) {
 	repo, target, err := repository(ref)
@@ -317,17 +318,6 @@ func Pull(ctx context.Context, ref, dst string) (Config, error) {
 	if err := checkZygoteLayer(dst, cfg); err != nil {
 		return Config{}, err
 	}
-	// A Hyperlight snapshot says so twice, by its layer's media type and
-	// by its config's format, and the two must agree, so a home never
-	// opens a CRIU tar as a snapshot, nor the reverse.
-	for _, l := range m.Layers {
-		if l.Annotations[ocispec.AnnotationTitle] != fileImages {
-			continue
-		}
-		if snap := l.MediaType == MediaTypeHyperlight; snap != (cfg.ImagesFormat == ImagesFormatHyperlight) {
-			return Config{}, fmt.Errorf("artifact: %s images layer is %q, its config says format %q", ref, l.MediaType, cfg.ImagesFormat)
-		}
-	}
 	if cfg.HasZygote() {
 		if err := os.Chmod(ZygotePath(dst), 0o755); err != nil {
 			return Config{}, err
@@ -342,6 +332,20 @@ func Pull(ctx context.Context, ref, dst string) (Config, error) {
 	}
 	if err := checkImagesLayer(dst, cfg); err != nil {
 		return Config{}, err
+	}
+	// The directory must pack to the digest pulled, the rule Reverify
+	// holds it to at every later warm. So a manifest Pack would not write
+	// is refused here: a layer under a media type other than the one its
+	// config gives it (a Hyperlight snapshot under the CRIU type, which a
+	// home would open as CRIU images, or the reverse), a layer too many
+	// or too few.
+	_ = fs.Close()
+	got, err := packedDigest(ctx, dst, cfg)
+	if err != nil {
+		return Config{}, err
+	}
+	if got != desc.Digest.String() {
+		return Config{}, fmt.Errorf("artifact: %s packs to %s, not the %s pulled", ref, got, desc.Digest)
 	}
 	if err := writeDigest(dst, desc.Digest.String()); err != nil {
 		return Config{}, err
@@ -364,16 +368,11 @@ func Reverify(ctx context.Context, dir, digest string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
-	fs, err := file.New(dir)
+	got, err := packedDigest(ctx, dir, cfg)
 	if err != nil {
 		return Config{}, err
 	}
-	desc, err := pack(ctx, fs, dir, cfg)
-	_ = fs.Close()
-	if err != nil {
-		return Config{}, err
-	}
-	if got := desc.Digest.String(); got != digest {
+	if got != digest {
 		return Config{}, fmt.Errorf("artifact: cached %s packs to %s", digest, got)
 	}
 	if cfg.HasZygote() {
@@ -390,6 +389,20 @@ func Reverify(ctx context.Context, dir, digest string) (Config, error) {
 	}
 	cfg.Digest = digest
 	return cfg, nil
+}
+
+// packedDigest is the manifest digest dir packs to, as Pack computes it.
+func packedDigest(ctx context.Context, dir string, cfg Config) (string, error) {
+	fs, err := file.New(dir)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = fs.Close() }()
+	desc, err := pack(ctx, fs, dir, cfg)
+	if err != nil {
+		return "", err
+	}
+	return desc.Digest.String(), nil
 }
 
 // checkZygoteLayer refuses a Hyperlight snapshot artifact directory that

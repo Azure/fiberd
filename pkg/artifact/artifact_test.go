@@ -756,8 +756,9 @@ func TestPull(t *testing.T) {
 		{name: "images in the clear", want: "without a seal",
 			setup: pushFrom(plainImages, artifact.ArtifactType, "zygote", "config.json", "images.tar")},
 		// A Hyperlight snapshot pushed under a layer type that is not its
-		// own: the layer says one thing and the config another.
-		{name: "a Hyperlight snapshot under another media type", want: "its config says format",
+		// own: the layer says one thing and the config another, so it
+		// does not pack to the digest pulled.
+		{name: "a Hyperlight snapshot under another media type", want: "packs to",
 			setup: pushFrom(func(t *testing.T) string {
 				_, pub := fleet(t)
 				out := t.TempDir()
