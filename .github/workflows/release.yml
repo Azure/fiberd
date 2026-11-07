@@ -8,10 +8,11 @@ on:
   # given, creating the tag if it is new. An existing tag is released by
   # a run started from that tag.
   #
-  # A dry run builds and checks the archives and SDK packages and
-  # publishes nothing. It makes no tag, release, image or package, and
-  # attests nothing. The images are not built, since their job pushes them. The
-  # tag only names the files, so any valid one will do, from any branch.
+  # A dry run builds and checks the archives, the SDK packages and the
+  # zygote artifact, and publishes nothing. It makes no tag, release, image
+  # or package, and attests nothing. The images are not built, since their
+  # job pushes them. The tag only names the files, so any valid one will do,
+  # from any branch.
   # The files are kept as the release-assets artifact.
   workflow_dispatch:
     inputs:
@@ -41,6 +42,7 @@ env:
   IMAGE: ghcr.io/azure/fiberd
   IMAGE_RUNC: ghcr.io/azure/fiberd-runc
   IMAGE_GVISOR: ghcr.io/azure/fiberd-gvisor
+  ZYGOTE_ARTIFACT: ghcr.io/azure/fiberd-refzygote
   # The input on a manual run, the pushed tag otherwise.
   TAG: ${{ inputs.tag || github.ref_name }}
   DESCRIPTION: fiberd with criu and the zygote library
@@ -81,7 +83,7 @@ jobs:
           fi
           major=${BASH_REMATCH[1]} minor=${BASH_REMATCH[2]} pre=${BASH_REMATCH[4]}
           # A dry run never reaches a push, so a bad image name stops here.
-          for image in "$IMAGE" "$IMAGE_RUNC" "$IMAGE_GVISOR"; do
+          for image in "$IMAGE" "$IMAGE_RUNC" "$IMAGE_GVISOR" "$ZYGOTE_ARTIFACT"; do
             if [[ "$image" != "${image,,}" ]]; then
               echo "image names must be lowercase: $image" >&2
               exit 1
@@ -285,9 +287,51 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
+  # The reference zygote as a template artifact, one per architecture, so a
+  # grant can pull a release's template as a tenant does. The smoke run needs
+  # the architecture itself, so each builds on a native runner. The digest
+  # changes with every build, so publish-image pushes these same bytes. The
+  # time limit leaves room for run.sh to build the dev image if it must.
+  zygote-artifact:
+    name: build the zygote artifact ${{ matrix.arch }}
+    needs: [validate-tag, ci, integration, conformance, examples, fuzz]
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 75
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: true
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: build the artifact
+        shell: bash
+        run: hack/dev/run.sh bash hack/release/zygote-artifact.sh bin/zygote-artifact "$(id -u):$(id -g)"
+      - name: check the artifact
+        shell: bash
+        env:
+          ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          bin/zygote-artifact/zygotectl inspect -dir bin/zygote-artifact/artifact |
+            jq -e --arg arch "$ARCH" '.config | .arch == $arch and .linking == "static" and (has("images") | not)'
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: zygote-artifact-${{ matrix.arch }}
+          path: bin/zygote-artifact/artifact/
+          if-no-files-found: error
+          retention-days: 7
+
   build-assets:
     name: build release archives
-    needs: [validate-tag, ci, integration, conformance, examples, fuzz, python-sdist, python-wheels, npm-package]
+    needs: [validate-tag, ci, integration, conformance, examples, fuzz, python-sdist, python-wheels, npm-package, zygote-artifact]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
@@ -302,8 +346,9 @@ jobs:
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
-      # The Python sdist and wheels and the npm tarball join the archives
-      # under SHA256SUMS and the provenance attestation.
+      # The Python sdist and wheels, the npm tarball and the zygote artifact's
+      # digests join the archives under SHA256SUMS and the provenance
+      # attestation.
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: npm-package
@@ -313,6 +358,10 @@ jobs:
           pattern: python-*
           path: ${{ runner.temp }}/python
           merge-multiple: true
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: zygote-artifact-*
+          path: ${{ runner.temp }}/zygote-artifact
       - name: install syft
         env:
           SYFT_VERSION: 1.52.0
@@ -400,7 +449,14 @@ jobs:
           done
           rm -rf "$lib"
           cp "$RUNNER_TEMP"/python/fiberd-*.tar.gz "$RUNNER_TEMP"/python/fiberd-*.whl "$RUNNER_TEMP"/npm/fiberd-client-*.tgz "$dist/"
-          (cd "$dist" && sha256sum -- *.tar.gz *.whl *.tgz *.spdx.json > SHA256SUMS)
+          # A script reads each architecture's template digest from here.
+          digests="$dist/refzygote_${VERSION}.json"
+          jq -n --arg registry "$ZYGOTE_ARTIFACT" \
+            --rawfile amd64 "$RUNNER_TEMP/zygote-artifact/zygote-artifact-amd64/DIGEST" \
+            --rawfile arm64 "$RUNNER_TEMP/zygote-artifact/zygote-artifact-arm64/DIGEST" \
+            '{registry: $registry, digests: {amd64: ($amd64 | rtrimstr("\n")), arm64: ($arm64 | rtrimstr("\n"))}}' > "$digests"
+          jq -e '[.digests[] | test("^sha256:[0-9a-f]{64}$")] | length == 2 and all' "$digests" > /dev/null
+          (cd "$dist" && sha256sum -- *.tar.gz *.whl *.tgz *.spdx.json "${digests##*/}" > SHA256SUMS)
       # The names, both zygote libraries (no pointer authentication on
       # arm64) and a build from the source archive. This runner's objdump
       # cannot read aarch64 code, so the cross binutils are installed.
@@ -587,6 +643,23 @@ jobs:
     permissions:
       contents: write
     steps:
+      # A re-run keeps validate-tag's answer, and another run may have released
+      # this tag since. The action below would turn a live pre-release back
+      # into a draft. Only a complete listing proves the tag is not released.
+      - name: refuse a released tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if ! live=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[] | select(.draft | not) | .tag_name'); then
+            echo "::error::cannot list the releases, so nothing changed. Re-run this job."
+            exit 1
+          fi
+          if grep -Fxq -- "$TAG" <<< "$live"; then
+            echo "::error::$TAG is already released"
+            exit 1
+          fi
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-assets
@@ -630,12 +703,55 @@ jobs:
         with:
           pattern: digest-*
           path: ${{ runner.temp }}/digests
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: zygote-artifact-*
+          path: ${{ runner.temp }}/zygote-artifact
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-assets
+          path: ${{ runner.temp }}/release-assets
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # A re-run of this job alone skips release-draft and its check, and every
+      # step from here moves a tag. This token cannot see drafts, so the check
+      # looks for a published release.
+      - name: refuse a released tag
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if ! live=$(gh api --paginate "repos/$GITHUB_REPOSITORY/releases?per_page=100" --jq '.[] | select(.draft | not) | .tag_name'); then
+            echo "::error::cannot list the releases, so no tag moved. Re-run this job."
+            exit 1
+          fi
+          if grep -Fxq -- "$TAG" <<< "$live"; then
+            echo "::error::$TAG is already released"
+            exit 1
+          fi
+      # Pushed here, with the image tags, so these bytes go out only once a
+      # draft lists them. A re-run pushes the same bytes and the same digests.
+      - name: push the zygote artifacts
+        shell: bash
+        env:
+          VERSION: ${{ needs.validate-tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          tar -xzf "$RUNNER_TEMP/release-assets/fiberd_${VERSION}_linux_amd64.tar.gz" -C "$RUNNER_TEMP" ./zygotectl
+          for arch in amd64 arm64; do
+            dir="$RUNNER_TEMP/zygote-artifact/zygote-artifact-$arch"
+            built=$(cat "$dir/DIGEST")
+            pushed=$("$RUNNER_TEMP/zygotectl" push -dir "$dir" -ref "$ZYGOTE_ARTIFACT:$VERSION-$arch")
+            if [[ "$pushed" != "$built" ]]; then
+              echo "::error::pushed $pushed for $arch, but the release lists $built"
+              exit 1
+            fi
+          done
       - id: previous
         name: record where each tag points before moving it
         shell: bash
@@ -749,6 +865,9 @@ jobs:
           IMAGE_GVISOR_DIGEST: ${{ needs.publish-image.outputs.digest_gvisor }}
         run: |
           set -euo pipefail
+          gh release download "$TAG" --pattern "refzygote_${VERSION}.json"
+          ZYGOTE_AMD64=$(jq -r .digests.amd64 "refzygote_${VERSION}.json")
+          ZYGOTE_ARM64=$(jq -r .digests.arm64 "refzygote_${VERSION}.json")
           {
             cat <<EOF
           ## Container images
@@ -762,6 +881,13 @@ jobs:
           - \`${IMAGE}@${IMAGE_DIGEST}\`
           - \`${IMAGE_RUNC}@${IMAGE_RUNC_DIGEST}\`
           - \`${IMAGE_GVISOR}@${IMAGE_GVISOR_DIGEST}\`
+
+          ## Reference zygote
+
+          A bare template artifact per architecture, for the proc and runc backends. \`refzygote_${VERSION}.json\` lists the same digests for a script.
+
+          - \`${ZYGOTE_ARTIFACT}@${ZYGOTE_AMD64}\` (amd64)
+          - \`${ZYGOTE_ARTIFACT}@${ZYGOTE_ARM64}\` (arm64)
 
           ## Python SDK
 
@@ -896,10 +1022,33 @@ jobs:
             fi
           done
           exit "$failed"
+      # The release's own zygotectl never logs in to pull, as a home never
+      # does, and it reads the blobs as well as the manifest. Everything comes
+      # from the published release, as for a tenant, so a re-run works after
+      # the run's own artifacts expire.
+      - name: pull each zygote artifact without a login
+        if: ${{ !cancelled() }}
+        shell: bash
+        env:
+          VERSION: ${{ needs.validate-tag.outputs.version }}
+        run: |
+          set -euo pipefail
+          assets="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG"
+          curl -fsSL "$assets/fiberd_${VERSION}_linux_amd64.tar.gz" | tar -xz -C "$RUNNER_TEMP" ./zygotectl
+          digests=$(curl -fsSL "$assets/refzygote_${VERSION}.json")
+          failed=0
+          for arch in amd64 arm64; do
+            digest=$(jq -r ".digests.$arch" <<< "$digests")
+            if ! "$RUNNER_TEMP/zygotectl" pull -ref "$ZYGOTE_ARTIFACT@$digest" -out "$RUNNER_TEMP/pull-$arch" >/dev/null; then
+              echo "::error::$ZYGOTE_ARTIFACT@$digest cannot be pulled. If its package is private, set the visibility to public, then re-run this job."
+              failed=1
+            fi
+          done
+          exit "$failed"
 
   cleanup:
     name: clean up a failed or cancelled release
-    needs: [validate-tag, ci, integration, conformance, examples, fuzz, python-sdist, python-wheels, npm-package, build-assets, build-image, release-draft, publish-image, publish-release, publish-pypi, publish-npm]
+    needs: [validate-tag, ci, integration, conformance, examples, fuzz, python-sdist, python-wheels, npm-package, zygote-artifact, build-assets, build-image, release-draft, publish-image, publish-release, publish-pypi, publish-npm]
     # A dry run left nothing to clean up, and its tag may name a real draft.
     if: >-
       always() && !inputs.dry_run && needs.validate-tag.result == 'success' &&
@@ -980,9 +1129,10 @@ jobs:
           else
             kind="users/$owner"
           fi
-          # Each image is its own package. A package this run never pushed to
-          # does not exist yet, which is not an error.
-          for image in "$IMAGE" "$IMAGE_RUNC" "$IMAGE_GVISOR"; do
+          # Each image is its own package, and so is the zygote artifact, which
+          # moves no tag. A package this run never pushed to does not exist
+          # yet, which is not an error.
+          for image in "$IMAGE" "$IMAGE_RUNC" "$IMAGE_GVISOR" "$ZYGOTE_ARTIFACT"; do
             name=${image##*/}
             echo "cleaning $image"
             # Tags that existed point back where they were. A tag this run
