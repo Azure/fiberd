@@ -32,11 +32,11 @@ const (
 )
 
 // Proc is what the proc runtime needs, as hack/test/caps.sh measured it.
-// SysAdmin covers namespaces, mounts and cgroups. SysTime and SysChroot
-// let CRIU restore a fiber's time and mount namespaces. NetAdmin is for
-// TCP repair, and SetPCAP empties each fiber's bounding set. CRIU attaches
-// to fibers it did not start, which Yama's default ptrace_scope 1 allows
-// only with SysPtrace, and raises its own open-file limit (SysResource).
+// SysAdmin covers namespaces and mounts. SysTime and SysChroot let CRIU
+// restore a fiber's time and mount namespaces. NetAdmin is for TCP repair,
+// and SetPCAP empties each fiber's bounding set. CRIU attaches to fibers
+// it did not start, which Yama's default ptrace_scope 1 allows only with
+// SysPtrace, and raises its own open-file limit (SysResource).
 var Proc = []int{SetPCAP, NetAdmin, SysChroot, SysPtrace, SysAdmin, SysResource, SysTime}
 
 // Runc is what the runc runtime needs, measured by running tests/integration/runc

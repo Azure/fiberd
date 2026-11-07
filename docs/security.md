@@ -77,7 +77,7 @@ An `UNTRUSTED` grant, the default, is admitted only on a backend that isolates t
 
 ## fiberd privileges
 
-With proc, runc, gVisor or Hyperlight, fiberd re-executes at start with only the capabilities that runtime needs, which for Hyperlight is none. A fiberd that cannot drop the rest refuses to start, unless `-all-caps`. Nobody has measured what Cloud Hypervisor needs, so with it fiberd keeps what it started with. [sys.md](design/sys.md) explains each capability, and [kubernetes.md](design/kubernetes.md) how the example Pod applies the set.
+With proc, runc, gVisor or Hyperlight, fiberd re-executes at start with only the capabilities that runtime needs, which for Hyperlight is none. An unprivileged Pod on any of them must still give fiberd SYS_ADMIN at start, for the cgroup and sysctl remounts that run before the narrowing, and the Hyperlight set keeps none of it afterwards ([sys.md](design/sys.md)). A fiberd that cannot drop the rest refuses to start, unless `-all-caps`. Nobody has measured what Cloud Hypervisor needs, so with it fiberd keeps what it started with. [sys.md](design/sys.md) explains each capability, and [kubernetes.md](design/kubernetes.md) how the example Pod applies the set.
 
 ## Templates and deltas
 

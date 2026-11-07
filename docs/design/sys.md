@@ -32,7 +32,7 @@ flowchart TD
 
 | Runtime | Keeps | Why |
 | --- | --- | --- |
-| proc (7) | SYS_ADMIN, SYS_CHROOT, SYS_TIME, NET_ADMIN, SETPCAP, SYS_PTRACE, SYS_RESOURCE | Namespaces, mounts and cgroups. CRIU restoring a fiber's mount and time namespaces, and TCP repair. The [zygote](../glossary.md#zygote) emptying each fiber's bounding set. CRIU attaching to fibers it did not start, which Yama's default `ptrace_scope` 1 allows only with SYS_PTRACE, and raising its open-file limit |
+| proc (7) | SYS_ADMIN, SYS_CHROOT, SYS_TIME, NET_ADMIN, SETPCAP, SYS_PTRACE, SYS_RESOURCE | Namespaces and mounts. CRIU restoring a fiber's mount and time namespaces, and TCP repair. The [zygote](../glossary.md#zygote) emptying each fiber's bounding set. CRIU attaching to fibers it did not start, which Yama's default `ptrace_scope` 1 allows only with SYS_PTRACE, and raising its open-file limit |
 | runc (11) | the seven plus CHOWN, DAC_OVERRIDE, SETGID, SETUID | runc writes the mapped root's id maps and chowns `exec.fifo` to it. runc, criu and fiberd open files the mapped root owns with modes that keep root out. KILL is not needed, since fibers and the container's init end through their cgroups |
 | gVisor (4) | SYS_ADMIN, SETGID, SETUID, SETFCAP | SYS_ADMIN mounts the templates tmpfs and makes the sandbox's namespaces. Without any one of the other three, runsc cannot fork and exec its gofer process. The Sentry serves the fibers' syscalls and CRIU is not involved, so nothing proc keeps for CRIU is needed |
 | Hyperlight (0) | nothing | The helper opens `/dev/kvm` by its file mode, and the guest is behind the hypervisor |
@@ -45,6 +45,6 @@ fiberd re-executes with its keep set unless `-all-caps`. One that holds more but
 
 ## Security notes and known gaps
 
-- SYS_ADMIN is broad. Namespaces, mounts and cgroups need it, and it covers far more. The fibers hold none of it on proc, and on runc only inside their user namespace.
+- SYS_ADMIN is broad. Namespaces and mounts need it, the cgroup remount among them, and it covers far more. The fibers hold none of it on proc, and on runc only inside their user namespace.
 - Cloud Hypervisor and the stub are not measured. With them fiberd keeps the capabilities it started with.
 - The measured sets assume fibers run as fiberd's user. A proc [template](../glossary.md#template) that switches user is likely to need more.

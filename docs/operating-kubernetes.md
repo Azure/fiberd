@@ -50,7 +50,7 @@ fiberd keeps its state, the [epoch](glossary.md#epoch) included, in `/var/lib/fi
 
 - fiberd narrows its capabilities at start to the set its [backend](glossary.md#backend) needs ([capabilities](design/sys.md)). A proc Pod runs unprivileged with only those.
 - An unprivileged Pod gets cgroupfs and the [CRIU](glossary.md#criu) sysctls read-only. fiberd makes them writable at start.
-- The container needs an Unconfined seccomp profile, because CRIU cannot dump from under a filter.
+- A proc or runc Pod needs an Unconfined seccomp profile, because CRIU cannot dump from under a filter.
 - On a node whose containerd applies its default AppArmor profile, an unprivileged Pod also needs `appArmorProfile: Unconfined`. Otherwise fiberd's remounts are denied.
 - Put untrusted workloads on gVisor or Hyperlight, never on proc or runc.
 - Serve the API with `-tls-cert`, `-tls-key` and `-client-ca`, so every call carries a caller identity and grants are bound to it ([security.md](security.md#control-plane)). A grant names the key of the caller's certificate. With cert-manager, a renewal keeps that key only when the caller's Certificate sets `privateKey.rotationPolicy: Never`. With key rotation on, every renewal needs the caller's grants minted again ([grant.md](design/grant.md)).
