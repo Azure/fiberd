@@ -160,9 +160,11 @@ func cacheImages(t *testing.T, r *Runtime, pages string) string {
 	return images
 }
 
-// fileEntry writes a parent checkpoint into r's store and returns its hash.
+// fileEntry writes a parent checkpoint into r's store in a section, as
+// production does, and returns its hash.
 func fileEntry(t *testing.T, r *Runtime, pages string) string {
 	t.Helper()
+	defer r.useParents()()
 	sha := shaOf(pages)
 	if err := writeParentDir(filepath.Join(r.parentsDir(), sha), pages); err != nil {
 		t.Fatal(err)
@@ -170,9 +172,12 @@ func fileEntry(t *testing.T, r *Runtime, pages string) string {
 	return sha
 }
 
-// nameByDelta writes a delta manifest under r's delta store naming sha.
+// nameByDelta writes a delta manifest under r's delta store naming sha,
+// in a section as production does. A prune that scanned before it looks
+// again.
 func nameByDelta(t *testing.T, r *Runtime, grant, name, sha string) {
 	t.Helper()
+	defer r.useParents()()
 	if err := writeDelta(r.cfg.DeltaDir, grant, name, sha); err != nil {
 		t.Fatal(err)
 	}
@@ -192,6 +197,30 @@ func writeDelta(deltas, grant, name, sha string) error {
 func pruned(t *testing.T, r *Runtime) {
 	t.Helper()
 	waitFor(t, "a prune", r.pruneParents)
+}
+
+// TestStoreHelpersEndSections checks that the helpers' writes end a
+// section, so a prune that scanned before them scans again. Regression:
+// they wrote with no section, and a home's start prune that had scanned
+// before nameByDelta removed the entry fileEntry filed after it.
+func TestStoreHelpersEndSections(t *testing.T) {
+	cases := []struct {
+		name  string
+		write func(t *testing.T, r *Runtime)
+	}{
+		{name: "fileEntry", write: func(t *testing.T, r *Runtime) { fileEntry(t, r, "filed") }},
+		{name: "nameByDelta", write: func(t *testing.T, r *Runtime) { nameByDelta(t, r, "g1", "1-1", shaOf("named")) }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r, _ := storeHome(t)
+			seen := r.storeUses.Load()
+			tc.write(t, r)
+			if r.storeUses.Load() == seen {
+				t.Fatal("the write ended no section")
+			}
+		})
+	}
 }
 
 // TestPruneParents checks what a prune removes: every store entry no
@@ -515,7 +544,9 @@ func TestPruneTriggers(t *testing.T) {
 			waitFor(t, "the parent of the discarded delta to go", func() bool { return !exists(parentOf(r, "zygote pages of g1")) })
 		}},
 		{name: "a delta discarded through DiscardDelta lets its parent go", run: func(t *testing.T, r *Runtime) {
-			// Named before it is filed, since the home's pruner runs.
+			// Named before it is filed, since the home's pruner runs. The
+			// section in nameByDelta sends a prune that scanned before the
+			// name back to scan, so none can take the entry once it is filed.
 			nameByDelta(t, r, "g1", "claimed-s-1", shaOf("claimed"))
 			sha := fileEntry(t, r, "claimed")
 			pruned(t, r)
