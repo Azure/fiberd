@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -164,6 +165,7 @@ func TestCloneOutcomes(t *testing.T) {
 		requireBound bool
 		want         core.StatusCode
 		wantErr      error
+		hidden       string // a value the refusal must not name
 		running      int    // the token's grant's running fibers after the clone
 		wantRoute    string // the routing key the response carries
 		unheld       bool   // the token's grant must not be in the ledger afterwards
@@ -214,10 +216,11 @@ func TestCloneOutcomes(t *testing.T) {
 			grants: []core.Grant{g1}, token: "g1", want: core.OK, running: 1},
 		// A home that knows its own grant refuses to self-admit any other,
 		// so a token for a terminated Pod whose name a later Pod reuses
-		// cannot re-mint fences on the new one.
+		// cannot re-mint fences on the new one. The refusal names the
+		// presented UID and not the home's own.
 		{name: "a foreign UID is refused when the home names its own", health: "up", tier: core.TierCheckpoint, grants: []core.Grant{g1},
 			setup: func(t *testing.T, a *core.Core) { a.SelfAdmitUID = "g-own" },
-			token: "g1", want: core.Unauthenticated, wantErr: core.ErrWrongAudience, unheld: true},
+			token: "g1", want: core.Unauthenticated, wantErr: core.ErrWrongAudience, hidden: "g-own", unheld: true},
 		{name: "the home's own UID is self-admitted", health: "down", tier: core.TierCheckpoint, grants: []core.Grant{g1},
 			setup: func(t *testing.T, a *core.Core) { a.SelfAdmitUID = "g1" },
 			token: "g1", want: core.OK, running: 1},
@@ -332,6 +335,9 @@ func TestCloneOutcomes(t *testing.T) {
 			resp, code, err := a.Clone(context.Background(), req)
 			if tc.wantErr != nil && !errors.Is(err, tc.wantErr) {
 				t.Fatalf("Clone err = %v, want %v", err, tc.wantErr)
+			}
+			if tc.hidden != "" && err != nil && strings.Contains(err.Error(), tc.hidden) {
+				t.Fatalf("Clone err = %v names %q", err, tc.hidden)
 			}
 			if code != tc.want {
 				t.Fatalf("Clone code = %d, want %d (err %v)", code, tc.want, err)

@@ -157,7 +157,7 @@ func TestVerify(t *testing.T) {
 		wantCaller  string // on success, the caller the grant is bound to, when set
 	}{
 		{name: "good", token: good, pub: &pub, opts: grant.VerifyOptions{Audience: "node-a"}, wantOK: true, wantCaller: strings.Repeat("Q", 43)},
-		{name: "wrong audience", token: good, pub: &pub, opts: grant.VerifyOptions{Audience: "node-b"}, want: grant.ErrWrongAudience},
+		{name: "wrong audience is core's refusal", token: good, pub: &pub, opts: grant.VerifyOptions{Audience: "node-b"}, want: core.ErrWrongAudience},
 		{name: "empty audience option", token: good, pub: &pub, opts: grant.VerifyOptions{}, want: grant.ErrWrongAudience},
 		{name: "wrong issuer", token: good, pub: &pub, opts: grant.VerifyOptions{Audience: "node-a", Issuer: "https://other"}, want: grant.ErrWrongIssuer},
 		{name: "no key", token: good, pub: nil, opts: grant.VerifyOptions{Audience: "node-a"}, wantMsg: "no key"},

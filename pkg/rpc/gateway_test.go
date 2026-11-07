@@ -27,7 +27,8 @@ func (errBody) Read([]byte) (int, error) { return 0, errors.New("connection rese
 // The JSON gateway is the gRPC service over HTTP. One checkpoint-tier
 // home and one warm-tier home serve the steps in order. Successes are the
 // response message as protojson. Failures are a google.rpc.Status whose
-// code picks the HTTP status, and a SHED miss also sets Retry-After.
+// code picks the HTTP status, and a SHED miss also sets Retry-After. A
+// grant for another home is 401 with a WrongHome detail in the body.
 func TestGateway(t *testing.T) {
 	ckpt := newHarness(t, core.TierCheckpoint)
 	warm := newHarness(t, core.TierWarm)
@@ -38,6 +39,7 @@ func TestGateway(t *testing.T) {
 	g1 := jsonGrant(t, core.Grant{UID: "g1", Audience: "node-a", Tenant: "acme", FiberMax: 2})
 	full := jsonGrant(t, core.Grant{UID: "g2", Audience: "node-a", FiberMax: 1})
 	high := jsonGrant(t, core.Grant{UID: "g3", Audience: "node-a", MinTier: core.TierCheckpoint})
+	elsewhere := jsonGrant(t, core.Grant{UID: "g4", Audience: "node-b", Tenant: "acme"})
 	cloneBody := func(grantJWT, extra string) string {
 		b, _ := json.Marshal(grantJWT)
 		return `{"grantJwt":` + string(b) + extra + `}`
@@ -60,6 +62,7 @@ func TestGateway(t *testing.T) {
 		wantKind   string // CloneResponse kind on success, "" for CREATE
 		wantCode   codes.Code
 		wantMiss   *grantv1.MissCode
+		wantHome   string // the WrongHome detail's home, none when empty
 		wantRetry  string
 		wantMsg    string // substring of the status message
 		check      func(t *testing.T, body []byte)
@@ -90,6 +93,10 @@ func TestGateway(t *testing.T) {
 			wantStatus: http.StatusBadRequest, wantCode: codes.InvalidArgument, wantMsg: "deadline"},
 		{name: "a grant that does not verify is 401", method: "POST", path: "/v1/clone", body: fixed(cloneBody("{}", "")),
 			wantStatus: http.StatusUnauthorized, wantCode: codes.Unauthenticated},
+		{name: "a clone for another home is 401 and names this home", method: "POST", path: "/v1/clone", body: fixed(cloneBody(elsewhere, "")),
+			wantStatus: http.StatusUnauthorized, wantCode: codes.Unauthenticated, wantHome: "node-a"},
+		{name: "a discard for another home is 401 and names this home", method: "POST", path: "/v1/discard", body: fixed(cloneBody(elsewhere, `,"session":"S"`)),
+			wantStatus: http.StatusUnauthorized, wantCode: codes.Unauthenticated, wantHome: "node-a"},
 		{name: "a grant above the home's tier is 412", home: warm, method: "POST", path: "/v1/clone", body: fixed(cloneBody(high, "")),
 			wantStatus: http.StatusPreconditionFailed, wantCode: codes.FailedPrecondition},
 		{name: "the only fiber of a grant is taken", method: "POST", path: "/v1/clone", body: fixed(cloneBody(full, "")),
@@ -175,7 +182,7 @@ func TestGateway(t *testing.T) {
 					t.Fatalf("body = %q, want {}", rec.Body.String())
 				}
 			default:
-				checkStatusBody(t, rec.Body.Bytes(), st.wantCode, st.wantMiss, st.wantMsg)
+				checkStatusBody(t, rec.Body.Bytes(), st.wantCode, st.wantMiss, st.wantHome, st.wantMsg)
 			}
 		})
 	}
@@ -191,8 +198,9 @@ func kindName(k string) string {
 }
 
 // checkStatusBody decodes a google.rpc.Status JSON body and checks its
-// code, its message and the Miss detail when one is wanted.
-func checkStatusBody(t *testing.T, body []byte, code codes.Code, miss *grantv1.MissCode, msg string) {
+// code, its message, the Miss detail when one is wanted and the WrongHome
+// detail, which must name home or be absent when home is empty.
+func checkStatusBody(t *testing.T, body []byte, code codes.Code, miss *grantv1.MissCode, home, msg string) {
 	t.Helper()
 	pb := status.New(codes.OK, "").Proto() // an empty google.rpc.Status to decode into
 	if err := protojson.Unmarshal(body, pb); err != nil {
@@ -208,6 +216,9 @@ func checkStatusBody(t *testing.T, body []byte, code codes.Code, miss *grantv1.M
 		t.Fatalf("miss = %v, want none", got)
 	case miss != nil && (!ok || got.GetCode() != *miss || got.GetIssuer() != "https://issuer.test"):
 		t.Fatalf("miss = %v, want a %v miss from the issuer", got, *miss)
+	}
+	if wrong, ok := rpc.WrongHomeFromError(st.Err()); ok != (home != "") || wrong.GetHome() != home {
+		t.Fatalf("WrongHome = %v, %v, want %q", wrong, ok, home)
 	}
 }
 

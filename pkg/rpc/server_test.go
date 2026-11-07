@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -131,19 +132,23 @@ func TestMissCarriesDetail(t *testing.T) {
 // Every core outcome maps to one gRPC code. Only the two capacity misses
 // carry a Miss detail, and a deferred remote miss names the home the
 // caller should prefer. A missing workspace carries a NoWorkspace detail,
-// so it is not mistaken for a tier gap.
+// so it is not mistaken for a tier gap. A wrong-audience refusal carries a
+// WrongHome detail naming this home's node id, and no other refusal does.
 func TestEveryOutcomeMaps(t *testing.T) {
-	s := &rpc.Server{Issuer: "iss"}
+	s := &rpc.Server{Issuer: "iss", Core: &core.Core{NodeID: "node-a"}}
+	unnamed := &rpc.Server{Issuer: "iss", Core: &core.Core{}}
 	cases := []struct {
 		name         string
 		code         core.StatusCode
 		err          error
+		noHome       bool // the home has no node id
 		wantCode     codes.Code
 		wantMiss     bool
 		wantMissCode grantv1.MissCode
 		wantHome     string
 		wantRetry    uint32
 		wantNoWS     bool
+		wantWrong    string // the WrongHome detail's home, none when empty
 	}{
 		{name: "OK is no error", code: core.OK, wantCode: codes.OK},
 		{name: "SHED is ResourceExhausted with a miss and the default retry", code: core.Shed, wantCode: codes.ResourceExhausted,
@@ -156,6 +161,18 @@ func TestEveryOutcomeMaps(t *testing.T) {
 		{name: "NeedsTier is FailedPrecondition", code: core.NeedsTier, wantCode: codes.FailedPrecondition},
 		{name: "Invalid is InvalidArgument", code: core.Invalid, wantCode: codes.InvalidArgument},
 		{name: "Unauthenticated is Unauthenticated", code: core.Unauthenticated, wantCode: codes.Unauthenticated},
+		{name: "a wrong audience is Unauthenticated with a WrongHome naming this home", code: core.Unauthenticated,
+			err: fmt.Errorf("%w: aud=%q node=%q", core.ErrWrongAudience, "node-b", "node-a"), wantCode: codes.Unauthenticated, wantWrong: "node-a"},
+		{name: "the verifier's wrong audience carries it too", code: core.Unauthenticated,
+			err: fmt.Errorf("capability: %w", grant.ErrWrongAudience), wantCode: codes.Unauthenticated, wantWrong: "node-a"},
+		{name: "a bad signature carries no detail", code: core.Unauthenticated,
+			err: errors.New("capability: grant: signature: error in cryptographic primitive"), wantCode: codes.Unauthenticated},
+		{name: "an unknown key id carries no detail", code: core.Unauthenticated,
+			err: fmt.Errorf("capability: %w", grant.ErrUnknownKey), wantCode: codes.Unauthenticated},
+		{name: "a caller mismatch carries no detail", code: core.Unauthenticated,
+			err: core.ErrCallerMismatch, wantCode: codes.Unauthenticated},
+		{name: "a wrong audience on a home with no node id carries no detail", code: core.Unauthenticated,
+			err: core.ErrWrongAudience, noHome: true, wantCode: codes.Unauthenticated},
 		{name: "NotFound is NotFound", code: core.NotFound, wantCode: codes.NotFound},
 		{name: "Internal is Internal", code: core.Internal, wantCode: codes.Internal},
 		{name: "NoWorkspace is FailedPrecondition with a NoWorkspace detail", code: core.NoWorkspace,
@@ -168,9 +185,16 @@ func TestEveryOutcomeMaps(t *testing.T) {
 			if cause == nil {
 				cause = errors.New("x")
 			}
-			err := s.ToError(tc.code, cause)
+			srv := s
+			if tc.noHome {
+				srv = unnamed
+			}
+			err := srv.ToError(tc.code, cause)
 			if status.Code(err) != tc.wantCode {
 				t.Fatalf("%d -> %v, want %v", tc.code, status.Code(err), tc.wantCode)
+			}
+			if wrong, ok := rpc.WrongHomeFromError(err); ok != (tc.wantWrong != "") || wrong.GetHome() != tc.wantWrong {
+				t.Fatalf("%d WrongHome = %v, %v, want %q", tc.code, wrong, ok, tc.wantWrong)
 			}
 			miss, ok := rpc.MissFromError(err)
 			if ok != tc.wantMiss {
@@ -415,6 +439,86 @@ func TestDiscard(t *testing.T) {
 			r, err := h.server.Clone(mine, &grantv1.CloneRequest{GrantJwt: g, Session: "S"})
 			if err != nil || r.GetKind() != grantv1.CloneKind_CREATE {
 				t.Fatalf("clone S after the discard = %v %v, want CREATE", r.GetKind(), err)
+			}
+		})
+	}
+}
+
+// A home that refuses a grant for another home says which home it is, in
+// a WrongHome detail naming its node id, on Clone and on Discard, and in
+// the self-admit refusal. A grant refused for another reason, a home with
+// no node id and a miss on the home's own grant carry none. A token older
+// than the admitted grant, bound to the same key, still clones.
+func TestWrongHomeDetail(t *testing.T) {
+	future := time.Now().Add(time.Hour)
+	elsewhere := core.Grant{UID: "g1", Audience: "node-b", Tenant: "acme"}
+	here := core.Grant{UID: "g1", Audience: "node-a", Tenant: "acme"}
+	own := core.Grant{UID: "g-own", Audience: "node-a", Tenant: "acme", LeaseExpiry: future}
+	ownFile := jsonGrant(t, core.Grant{UID: "g-own", Audience: "node-b", Tenant: "acme", LeaseExpiry: future})
+	selfAdmits := func(a *core.Core) { a.SelfAdmitUID = "g-own" }
+	boundTo := func(jkt string) func(*core.Core) {
+		return func(a *core.Core) { a.Verify = boundVerifier{thumbprint: jkt} }
+	}
+	cases := []struct {
+		name     string
+		grant    core.Grant
+		discard  bool   // Discard instead of Clone
+		caller   string // the thumbprint of the caller's key, plaintext when empty
+		opts     []func(*core.Core)
+		setup    func(t *testing.T, h *harness)
+		wantCode codes.Code
+		wantHome string // the WrongHome detail's home, none when empty
+		wantMiss bool
+	}{
+		{name: "a Clone for another home names this home", grant: elsewhere, wantCode: codes.Unauthenticated, wantHome: "node-a"},
+		{name: "a Discard for another home names this home", grant: elsewhere, discard: true, wantCode: codes.Unauthenticated, wantHome: "node-a"},
+		{name: "the self-admit refusal names this home", grant: here,
+			opts: []func(*core.Core){selfAdmits}, wantCode: codes.Unauthenticated, wantHome: "node-a"},
+		{name: "another caller's grant carries no detail", grant: here,
+			opts: []func(*core.Core){boundTo("other-jkt")}, wantCode: codes.Unauthenticated},
+		{name: "a home with no node id carries no detail", grant: here,
+			opts: []func(*core.Core){selfAdmits, func(a *core.Core) { a.NodeID = "" }}, wantCode: codes.Unauthenticated},
+		{name: "a miss on the home's own grant carries no detail", grant: own,
+			opts: []func(*core.Core){selfAdmits, func(a *core.Core) {
+				a.OwnGrant = func() ([]byte, bool) { return []byte(ownFile), true }
+			}},
+			wantCode: codes.Unavailable, wantMiss: true},
+		{name: "a token older than the admitted grant on the same key still clones",
+			grant:  core.Grant{UID: "g1", Audience: "node-a", Tenant: "acme", LeaseExpiry: future},
+			caller: "owner-jkt", opts: []func(*core.Core){boundTo("owner-jkt")},
+			setup: func(t *testing.T, h *harness) {
+				newer := core.Grant{UID: "g1", Audience: "node-a", Tenant: "acme", LeaseExpiry: future.Add(time.Hour), CallerThumbprint: "owner-jkt"}
+				if _, err := h.core.Admit(context.Background(), newer); err != nil {
+					t.Fatalf("admit the newer grant: %v", err)
+				}
+			},
+			wantCode: codes.OK},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, core.TierCheckpoint, tc.opts...)
+			if tc.setup != nil {
+				tc.setup(t, h)
+			}
+			ctx := context.Background()
+			if tc.caller != "" {
+				ctx = rpc.WithCaller(ctx, tlsconf.Caller{Thumbprint: tc.caller})
+			}
+			token := jsonGrant(t, tc.grant)
+			var err error
+			if tc.discard {
+				_, err = h.server.Discard(ctx, &grantv1.DiscardRequest{GrantJwt: token, Session: "S"})
+			} else {
+				_, err = h.server.Clone(ctx, &grantv1.CloneRequest{GrantJwt: token})
+			}
+			if status.Code(err) != tc.wantCode {
+				t.Fatalf("code = %v, want %v (%v)", status.Code(err), tc.wantCode, err)
+			}
+			if wrong, ok := rpc.WrongHomeFromError(err); ok != (tc.wantHome != "") || wrong.GetHome() != tc.wantHome {
+				t.Fatalf("WrongHome = %v, %v, want %q (%v)", wrong, ok, tc.wantHome, err)
+			}
+			if rpc.IsMiss(err) != tc.wantMiss {
+				t.Fatalf("IsMiss = %v, want %v (%v)", rpc.IsMiss(err), tc.wantMiss, err)
 			}
 		})
 	}

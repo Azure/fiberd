@@ -16,7 +16,8 @@ import (
 // fiberd with the real verifier: a signed grant is admitted and served;
 // a signed but expired grant is a capacity miss keyed on lane health (the
 // C4 rule), and an unverifiable one (stale keys, issuer gone) is SHED,
-// never Unauthenticated. The steps share one core and run in order. Each
+// never Unauthenticated. A signed grant for another home is refused with
+// core's sentinel. The steps share one core and run in order. Each
 // step's before hook moves the lane, the issuer or the clock.
 func TestCoreWithJWKSVerifier(t *testing.T) {
 	k, _ := grant.GenerateKey(jose.ES256)
@@ -35,6 +36,7 @@ func TestCoreWithJWKSVerifier(t *testing.T) {
 	good := is.mint(t, k, core.Grant{UID: "g-ok", Audience: "node-a", FiberMax: 2, LeaseExpiry: now.Add(time.Hour)})
 	expired := is.mint(t, k, core.Grant{UID: "g-exp", Audience: "node-a", LeaseExpiry: now.Add(-time.Minute)})
 	forged := is.mint(t, other, core.Grant{UID: "g-forged", Audience: "node-a", LeaseExpiry: now.Add(time.Hour)})
+	elsewhere := is.mint(t, k, core.Grant{UID: "g-else", Audience: "node-b", LeaseExpiry: now.Add(time.Hour)})
 
 	steps := []struct {
 		name     string
@@ -51,6 +53,8 @@ func TestCoreWithJWKSVerifier(t *testing.T) {
 			token:  expired, wantCode: core.Shed, wantErr: core.ErrGrantExpired},
 		{name: "a grant signed by an unknown key is unauthenticated", token: forged,
 			wantCode: core.Unauthenticated, wantErr: grant.ErrUnknownKey},
+		{name: "a signed grant for another home is refused as core's wrong audience", token: elsewhere,
+			wantCode: core.Unauthenticated, wantErr: core.ErrWrongAudience},
 		// Keys older than MaxStale with the issuer down shed with the
 		// unavailability error, not Unauthenticated.
 		{name: "stale keys with the issuer down shed instead of refusing",

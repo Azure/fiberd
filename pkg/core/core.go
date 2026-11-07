@@ -281,7 +281,7 @@ func (a *Core) Clone(ctx context.Context, req CloneRequest) (CloneResponse, Stat
 		// terminated Pod verifies on the later Pod that reuses its name,
 		// and self-admitting it would re-mint the old grant's fences here.
 		if a.SelfAdmitUID != "" && g.UID != a.SelfAdmitUID {
-			return CloneResponse{}, Unauthenticated, fmt.Errorf("%w: uid=%q, this home self-admits only %q", ErrWrongAudience, g.UID, a.SelfAdmitUID)
+			return CloneResponse{}, Unauthenticated, fmt.Errorf("%w: uid=%q is not the grant this home holds", ErrWrongAudience, g.UID)
 		}
 		// g stays the presented grant, since the caller check below
 		// compares the admitted grant with it.
