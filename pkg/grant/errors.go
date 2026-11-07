@@ -3,13 +3,17 @@ package grant
 import (
 	"errors"
 	"fmt"
+
+	"github.com/Azure/fiberd/pkg/core"
 )
 
 // Token errors.
 var (
-	ErrNoKID          = errors.New("grant: token has no kid header")
-	ErrClaimMismatch  = errors.New("grant: registered claims disagree with the grant claim")
-	ErrWrongAudience  = errors.New("grant: audience mismatch")
+	ErrNoKID         = errors.New("grant: token has no kid header")
+	ErrClaimMismatch = errors.New("grant: registered claims disagree with the grant claim")
+	// ErrWrongAudience is core's, so one sentinel covers the verifier's
+	// and the home's refusals of a grant for another home.
+	ErrWrongAudience  = core.ErrWrongAudience
 	ErrWrongIssuer    = errors.New("grant: issuer mismatch")
 	ErrMissingGrant   = errors.New("grant: token carries no grant claim")
 	ErrKeyMismatchAlg = errors.New("grant: key algorithm does not match token")

@@ -49,6 +49,8 @@ type FibersClient interface {
 	// DEFERRED_FALLBACK. FailedPrecondition when min_tier exceeds the
 	// home's tier, a parked session needs a tier the home lacks, or an
 	// untrusted grant reaches a home that does not isolate tenants.
+	// Unauthenticated when the grant is refused, with a WrongHome detail
+	// when it is not for this home.
 	Clone(ctx context.Context, in *CloneRequest, opts ...grpc.CallOption) (*CloneResponse, error)
 	// Park checkpoints a named session's fiber. A fiber without a session
 	// is refused with InvalidArgument, since nothing could resume it, so
@@ -59,7 +61,8 @@ type FibersClient interface {
 	// delta registry, and the session is forgotten. The next Clone of it
 	// creates. A running session is refused with InvalidArgument, so
 	// release its fiber with discard instead. A session neither parked
-	// here nor in the registry is NotFound.
+	// here nor in the registry is NotFound. Unauthenticated when the grant
+	// is refused, with a WrongHome detail when it is not for this home.
 	Discard(ctx context.Context, in *DiscardRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	Watch(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (grpc.ServerStreamingClient[Status], error)
 	// Upload writes one file into a running fiber's workspace. The first
@@ -191,6 +194,8 @@ type FibersServer interface {
 	// DEFERRED_FALLBACK. FailedPrecondition when min_tier exceeds the
 	// home's tier, a parked session needs a tier the home lacks, or an
 	// untrusted grant reaches a home that does not isolate tenants.
+	// Unauthenticated when the grant is refused, with a WrongHome detail
+	// when it is not for this home.
 	Clone(context.Context, *CloneRequest) (*CloneResponse, error)
 	// Park checkpoints a named session's fiber. A fiber without a session
 	// is refused with InvalidArgument, since nothing could resume it, so
@@ -201,7 +206,8 @@ type FibersServer interface {
 	// delta registry, and the session is forgotten. The next Clone of it
 	// creates. A running session is refused with InvalidArgument, so
 	// release its fiber with discard instead. A session neither parked
-	// here nor in the registry is NotFound.
+	// here nor in the registry is NotFound. Unauthenticated when the grant
+	// is refused, with a WrongHome detail when it is not for this home.
 	Discard(context.Context, *DiscardRequest) (*emptypb.Empty, error)
 	Watch(*emptypb.Empty, grpc.ServerStreamingServer[Status]) error
 	// Upload writes one file into a running fiber's workspace. The first

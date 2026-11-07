@@ -251,6 +251,12 @@ class UploadRequest(_message.Message):
     header: UploadHeader
     def __init__(self, header: _Optional[_Union[UploadHeader, _Mapping]] = ..., data: _Optional[bytes] = ...) -> None: ...
 
+class WrongHome(_message.Message):
+    __slots__ = ["home"]
+    HOME_FIELD_NUMBER: _ClassVar[int]
+    home: str
+    def __init__(self, home: _Optional[str] = ...) -> None: ...
+
 class Tier(int, metaclass=_enum_type_wrapper.EnumTypeWrapper):
     __slots__ = []
 

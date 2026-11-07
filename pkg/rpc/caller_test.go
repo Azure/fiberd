@@ -158,7 +158,7 @@ func TestUnnamedTLSPeerIsNotPlaintext(t *testing.T) {
 				t.Fatalf("GET /v1/status = %d %s, want %d", rec.Code, rec.Body.String(), tc.wantStatus)
 			}
 			if rec.Code != http.StatusOK {
-				checkStatusBody(t, rec.Body.Bytes(), codes.Unauthenticated, nil, "cannot name a caller")
+				checkStatusBody(t, rec.Body.Bytes(), codes.Unauthenticated, nil, "", "cannot name a caller")
 				return
 			}
 			var sts []map[string]any

@@ -340,6 +340,17 @@ export interface NoWorkspace {
 }
 
 /**
+ * WrongHome is attached as a detail to the Unauthenticated a Clone or
+ * Discard gets when the grant is not for this home, because it names
+ * another home or another grant than the one this home holds. home is
+ * this home's node id, the one audience it accepts, so the caller can
+ * fetch a grant for it. A grant that does not verify carries no detail.
+ */
+export interface WrongHome {
+  home: string;
+}
+
+/**
  * UploadHeader opens an Upload. It is the stream's first message and the
  * only header.
  */
@@ -1673,6 +1684,61 @@ export const NoWorkspace: MessageFns<NoWorkspace> = {
   },
 };
 
+function createBaseWrongHome(): WrongHome {
+  return { home: "" };
+}
+
+export const WrongHome: MessageFns<WrongHome> = {
+  encode(message: WrongHome, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.home !== "") {
+      writer.uint32(10).string(message.home);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): WrongHome {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const previousRecursionDepth = (reader as any).__tsProtoDecodeDepth ?? 0;
+    if (previousRecursionDepth >= 100) {
+      throw new globalThis.Error("protobuf decode recursion limit exceeded");
+    }
+    (reader as any).__tsProtoDecodeDepth = previousRecursionDepth + 1;
+    try {
+      const end = length === undefined ? reader.len : reader.pos + length;
+      const message = createBaseWrongHome();
+      while (reader.pos < end) {
+        const tag = reader.uint32();
+        switch (tag >>> 3) {
+          case 1: {
+            if (tag !== 10) {
+              break;
+            }
+
+            message.home = reader.string();
+            continue;
+          }
+        }
+        if ((tag & 7) === 4 || tag === 0) {
+          break;
+        }
+        reader.skip(tag & 7);
+      }
+      return message;
+    } finally {
+      (reader as any).__tsProtoDecodeDepth = previousRecursionDepth;
+    }
+  },
+
+  create<I extends Exact<DeepPartial<WrongHome>, I>>(base?: I): WrongHome {
+    return WrongHome.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<WrongHome>, I>>(object: I): WrongHome {
+    const message = createBaseWrongHome();
+    message.home = object.home ?? "";
+    return message;
+  },
+};
+
 function createBaseUploadHeader(): UploadHeader {
   return { fiberId: "", path: "", size: undefined, mode: 0, sha256: Buffer.alloc(0) };
 }
@@ -2233,6 +2299,8 @@ export const FibersService = {
    * DEFERRED_FALLBACK. FailedPrecondition when min_tier exceeds the
    * home's tier, a parked session needs a tier the home lacks, or an
    * untrusted grant reaches a home that does not isolate tenants.
+   * Unauthenticated when the grant is refused, with a WrongHome detail
+   * when it is not for this home.
    */
   clone: {
     path: "/fiberd.grant.v1.Fibers/Clone" as const,
@@ -2271,7 +2339,8 @@ export const FibersService = {
    * delta registry, and the session is forgotten. The next Clone of it
    * creates. A running session is refused with InvalidArgument, so
    * release its fiber with discard instead. A session neither parked
-   * here nor in the registry is NotFound.
+   * here nor in the registry is NotFound. Unauthenticated when the grant
+   * is refused, with a WrongHome detail when it is not for this home.
    */
   discard: {
     path: "/fiberd.grant.v1.Fibers/Discard" as const,
@@ -2337,6 +2406,8 @@ export interface FibersServer extends UntypedServiceImplementation {
    * DEFERRED_FALLBACK. FailedPrecondition when min_tier exceeds the
    * home's tier, a parked session needs a tier the home lacks, or an
    * untrusted grant reaches a home that does not isolate tenants.
+   * Unauthenticated when the grant is refused, with a WrongHome detail
+   * when it is not for this home.
    */
   clone: handleUnaryCall<CloneRequest, CloneResponse>;
   /**
@@ -2351,7 +2422,8 @@ export interface FibersServer extends UntypedServiceImplementation {
    * delta registry, and the session is forgotten. The next Clone of it
    * creates. A running session is refused with InvalidArgument, so
    * release its fiber with discard instead. A session neither parked
-   * here nor in the registry is NotFound.
+   * here nor in the registry is NotFound. Unauthenticated when the grant
+   * is refused, with a WrongHome detail when it is not for this home.
    */
   discard: handleUnaryCall<DiscardRequest, Empty>;
   watch: handleServerStreamingCall<Empty, Status>;
@@ -2377,6 +2449,8 @@ export interface FibersClient extends Client {
    * DEFERRED_FALLBACK. FailedPrecondition when min_tier exceeds the
    * home's tier, a parked session needs a tier the home lacks, or an
    * untrusted grant reaches a home that does not isolate tenants.
+   * Unauthenticated when the grant is refused, with a WrongHome detail
+   * when it is not for this home.
    */
   clone(
     request: CloneRequest,
@@ -2427,7 +2501,8 @@ export interface FibersClient extends Client {
    * delta registry, and the session is forgotten. The next Clone of it
    * creates. A running session is refused with InvalidArgument, so
    * release its fiber with discard instead. A session neither parked
-   * here nor in the registry is NotFound.
+   * here nor in the registry is NotFound. Unauthenticated when the grant
+   * is refused, with a WrongHome detail when it is not for this home.
    */
   discard(request: DiscardRequest, callback: (error: ServiceError | null, response: Empty) => void): ClientUnaryCall;
   discard(

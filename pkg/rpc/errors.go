@@ -5,6 +5,7 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/protoadapt"
 
 	grantv1 "github.com/Azure/fiberd/api/grant/v1"
@@ -18,6 +19,7 @@ import (
 //	core.NeedsTier        -> FailedPrecondition
 //	core.Invalid          -> InvalidArgument (ErrAnonymousPark, ErrSessionRunning)
 //	core.Unauthenticated  -> Unauthenticated
+//	                         + WrongHome{home} when the cause is core.ErrWrongAudience and the home has a node id
 //	core.NotFound         -> NotFound (ErrFiberUnknown, ErrSessionUnknown)
 //	core.NoWorkspace      -> FailedPrecondition + NoWorkspace
 //	core.OverBudget       -> ResourceExhausted, no Miss
@@ -48,6 +50,9 @@ func (s *Server) ToError(code core.StatusCode, err error) error {
 	case core.Invalid:
 		return status.Error(codes.InvalidArgument, msg)
 	case core.Unauthenticated:
+		if errors.Is(err, core.ErrWrongAudience) && s.Core.NodeID != "" {
+			return withDetail(codes.Unauthenticated, msg, &grantv1.WrongHome{Home: s.Core.NodeID})
+		}
 		return status.Error(codes.Unauthenticated, msg)
 	case core.NotFound:
 		return status.Error(codes.NotFound, msg)
@@ -60,8 +65,8 @@ func (s *Server) ToError(code core.StatusCode, err error) error {
 	}
 }
 
-func withDetail(c codes.Code, msg string, detail protoadapt.MessageV1) error {
-	st, err := status.New(c, msg).WithDetails(detail)
+func withDetail(c codes.Code, msg string, d protoadapt.MessageV1) error {
+	st, err := status.New(c, msg).WithDetails(d)
 	if err != nil {
 		// Cannot happen for a registered message type; fail loudly rather
 		// than return a bare code that violates the protocol.
@@ -70,34 +75,42 @@ func withDetail(c codes.Code, msg string, detail protoadapt.MessageV1) error {
 	return st.Err()
 }
 
-// MissFromError extracts the Miss detail from a gRPC error, for clients
-// and the conformance suite.
-func MissFromError(err error) (*grantv1.Miss, bool) {
+// detail is the first detail of type T a gRPC error carries.
+func detail[T proto.Message](err error) (T, bool) {
+	var none T
 	st, ok := status.FromError(err)
 	if !ok {
-		return nil, false
+		return none, false
 	}
 	for _, d := range st.Details() {
-		if m, ok := d.(*grantv1.Miss); ok {
+		if m, ok := d.(T); ok {
 			return m, true
 		}
 	}
-	return nil, false
+	return none, false
+}
+
+// MissFromError extracts the Miss detail from a gRPC error, for clients
+// and the conformance suite.
+func MissFromError(err error) (*grantv1.Miss, bool) {
+	return detail[*grantv1.Miss](err)
+}
+
+// WrongHomeFromError extracts the WrongHome detail from a gRPC error, for
+// clients and the conformance suite. Its home is the node id of the home
+// that refused the grant.
+func WrongHomeFromError(err error) (*grantv1.WrongHome, bool) {
+	return detail[*grantv1.WrongHome](err)
 }
 
 // IsNoWorkspace reports whether err is the refusal of a file call on a
 // fiber whose grant has no workspace.
 func IsNoWorkspace(err error) bool {
-	st, ok := status.FromError(err)
-	if !ok || st.Code() != codes.FailedPrecondition {
+	if status.Code(err) != codes.FailedPrecondition {
 		return false
 	}
-	for _, d := range st.Details() {
-		if _, ok := d.(*grantv1.NoWorkspace); ok {
-			return true
-		}
-	}
-	return false
+	_, ok := detail[*grantv1.NoWorkspace](err)
+	return ok
 }
 
 // IsMiss reports whether err is one of the two miss outcomes.
