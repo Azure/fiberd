@@ -1,21 +1,10 @@
-# Security policy
+## Security
 
-## Reporting a vulnerability
+Microsoft takes the security of our software products and services seriously, which
+includes all source code repositories in our GitHub organizations.
 
-Report a vulnerability privately through GitHub's private vulnerability reporting. Open the repository's Security tab and choose "Report a vulnerability". Do not open a public issue, pull request or discussion for it.
+**Please do not report security vulnerabilities through public GitHub issues.**
 
-Include the version, the backend, how to reproduce it and the impact.
-
-## Scope
-
-In scope is the code in this repository and what the releases ship. That is the binaries, the libfiberzygote library and the `ghcr.io/azure/fiberd`, `fiberd-runc` and `fiberd-gvisor` images. Bugs in dependencies such as criu, runc or gVisor belong to their projects, unless fiberd uses them unsafely.
-
-The gaps that [docs/production-readiness.md](docs/production-readiness.md) lists are known and need no report. [docs/security.md](docs/security.md) states the trust boundaries, and a way across one is a vulnerability.
-
-## The zygote library's hardening
-
-libfiberzygote is built with stable Rust, which has no stack protector, so its frames carry no canary. Safe Rust makes no unchecked stack write, and its unsafe code is libc calls with explicit lengths. This gap is known and needs no report.
-
-## What to expect
-
-A maintainer acknowledges the report within a week. Fixes ship in a new release with an advisory that credits you, unless you ask otherwise. Only the latest release gets fixes.
+For security reporting information, locations, contact information, and policies,
+please review the latest guidance for Microsoft repositories at
+[https://aka.ms/SECURITY.md](https://aka.ms/SECURITY.md).
